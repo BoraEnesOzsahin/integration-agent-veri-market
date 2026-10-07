@@ -1,0 +1,31 @@
+server:
+  port: ${SERVER_PORT:8083}
+
+spring:
+  application:
+    name: integration-agent-node
+
+agent:
+  institution-id: ${AGENT_ID:Banka_A}
+  institution-name: ${AGENT_NAME:Banka A Kurum İçi Entegrasyon Ajanı}
+  default-secret: ${AGENT_DEFAULT_SECRET:50000}
+  public-url: ${AGENT_PUBLIC_URL:http://localhost:8083}
+  heartbeat:
+    enabled: ${AGENT_HEARTBEAT_ENABLED:true}
+    interval-ms: 10000
+
+coordinator:
+  url: ${COORDINATOR_URL:http://localhost:8081}
+
+grpc:
+  client:
+    rust-mpc-engine:
+      address: 'static://localhost:50051'
+      negotiationType: PLAINTEXT
+    go-zkp-engine:
+      address: 'static://localhost:50052'
+      negotiationType: PLAINTEXT
+
+anoncreds:
+  service:
+    url: ${ANONCREDS_SERVICE_URL:http://localhost:3000}

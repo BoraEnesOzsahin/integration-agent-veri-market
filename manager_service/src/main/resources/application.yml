@@ -1,0 +1,24 @@
+server:
+  port: ${SERVER_PORT:8093}
+
+spring:
+  application:
+    name: manager-service
+
+node:
+  id: ${NODE_ID:${AGENT_ID:Banka_A}}
+  name: ${NODE_NAME:${AGENT_NAME:Banka A Kurum İçi Yönetici}}
+  agent-url: ${AGENT_PUBLIC_URL:http://localhost:8083}
+  manager-url: ${MANAGER_PUBLIC_URL:http://localhost:8093}
+  supported-datasets: ${SUPPORTED_DATASETS:bankalar,finans,kredi,consortium}
+  anoncreds-url: ${ANONCREDS_SERVICE_URL:http://localhost:3000}
+  coordinator-url: ${COORDINATOR_URL:http://localhost:8081}
+  heartbeat:
+    enabled: ${HEARTBEAT_ENABLED:true}
+    interval-ms: ${HEARTBEAT_INTERVAL_MS:10000}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
