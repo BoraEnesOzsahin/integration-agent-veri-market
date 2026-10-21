@@ -34,17 +34,16 @@ echo "  Hedef Coordinator       : $COORDINATOR_URL"
 echo "================================================================="
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-AGENT_JAR="$SCRIPT_DIR/target/integration_agent_node-1.0.0-SNAPSHOT.jar"
+AGENT_JAR="$SCRIPT_DIR/agent_core/target/agent_core-1.0.0-SNAPSHOT.jar"
+if [ ! -f "$AGENT_JAR" ]; then
+    AGENT_JAR="$SCRIPT_DIR/target/integration_agent_node-1.0.0-SNAPSHOT.jar"
+fi
 MANAGER_JAR="$SCRIPT_DIR/manager_service/target/manager_service-1.0.0-SNAPSHOT.jar"
 
-if [ ! -f "$AGENT_JAR" ]; then
-    echo ">>> integration_agent_node derleniyor..."
+if [ ! -f "$AGENT_JAR" ] || [ ! -f "$MANAGER_JAR" ]; then
+    echo ">>> Multi-module proje (agent_core & manager_service) derleniyor..."
     (cd "$SCRIPT_DIR" && mvn clean package -DskipTests)
-fi
-
-if [ ! -f "$MANAGER_JAR" ]; then
-    echo ">>> manager_service derleniyor..."
-    (cd "$SCRIPT_DIR/manager_service" && mvn clean package -DskipTests)
+    AGENT_JAR="$SCRIPT_DIR/agent_core/target/agent_core-1.0.0-SNAPSHOT.jar"
 fi
 
 echo ">>> Servisler başlatılıyor..."

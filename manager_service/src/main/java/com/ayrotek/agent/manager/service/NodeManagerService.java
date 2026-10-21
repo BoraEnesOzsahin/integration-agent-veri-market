@@ -152,7 +152,7 @@ public class NodeManagerService {
                 this.isApproved = true;
                 this.lastSuccessfulHeartbeat = Instant.now();
                 this.lastStatusMessage = "ONLINE_APPROVED";
-                log.debug("[NodeManager] Heartbeat başarılı -> {}", nodeId);
+                log.info("[NodeManager] Heartbeat başarılı -> {}", nodeId);
             } else if (resp.statusCode() == 403) {
                 this.isApproved = false;
                 this.lastStatusMessage = "PENDING_APPROVAL";
@@ -163,13 +163,15 @@ public class NodeManagerService {
             }
         } catch (Exception e) {
             this.lastStatusMessage = "Coordinator bağlantı hatası: " + e.getMessage();
-            log.debug("[NodeManager] Heartbeat iletilemedi: {}", e.getMessage());
+            log.warn("[NodeManager] Heartbeat iletilemedi: {}", e.getMessage());
         }
     }
 
     private void checkLocalServicesHealth() {
-        this.lastAgentHealth = pingUrl(cleanUrl(agentUrl) + "/api/v1/agent/status");
-        this.lastAnoncredsHealth = pingUrl(cleanUrl(anoncredsUrl) + "/api/schema") || pingUrl(cleanUrl(anoncredsUrl) + "/api/v1/schema");
+        String localAgent = cleanUrl(agentUrl).replace("host.docker.internal", "localhost");
+        String localAnon = cleanUrl(anoncredsUrl).replace("host.docker.internal", "localhost");
+        this.lastAgentHealth = pingUrl(localAgent + "/api/v1/agent/status");
+        this.lastAnoncredsHealth = pingUrl(localAnon + "/api/schema") || pingUrl(localAnon + "/api/v1/schema");
     }
 
     private boolean pingUrl(String url) {

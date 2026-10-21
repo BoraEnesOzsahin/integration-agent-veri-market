@@ -99,6 +99,50 @@ public class IntegrationAgentController {
         return ResponseEntity.ok(agentService.executePipeline(request));
     }
 
+    @PostMapping("/chamber/mint-vc")
+    @Operation(summary = "Data Chamber Odası İçin Kurum İçi Canlı VC Türet",
+               description = "Kurumun DMZ sınırları içindeki yerel PostgreSQL veritabanından ham veriyi çeker. Ham veri ASLA dışarı çıkmaz; yerel Pedersen taahhütleri ve ZKP ile mühürlenmiş W3C VC üretir.")
+    public ResponseEntity<Map<String, Object>> mintChamberVc(@RequestBody(required = false) Map<String, String> request) {
+        String chamberId = request != null ? request.getOrDefault("chamberId", "chamber-alpha") : "chamber-alpha";
+        String category = request != null ? request.getOrDefault("category", "gelir_gider") : "gelir_gider";
+        String tableName = request != null ? request.getOrDefault("tableName", "gelir_gider") : "gelir_gider";
+        return ResponseEntity.ok(agentService.mintChamberVc(chamberId, category, tableName));
+    }
+
+    @GetMapping("/db/overview")
+    @Operation(summary = "Kurumun Yerel PostgreSQL Tablo ve Şema Bilgilerini Getir",
+               description = "Kurumun DMZ içindeki veritabanı tablolarını, kolonlarını ve satır sayılarını listeler. Ham veri dışarı çıkmaz, yalnızca şema yapısı arayüze sunulur.")
+    public ResponseEntity<Map<String, Object>> getDatabaseOverview() {
+        return ResponseEntity.ok(agentService.getLocalDatabaseOverview());
+    }
+
+    @PostMapping("/chamber/mint-custom")
+    @Operation(summary = "Kullanıcı Tanımlı Şema ile Kurum İçi Canlı VC Türet",
+               description = "Kullanıcının seçtiği tablodan ve kolonlardan Pedersen Taahhüdü ve AnonCreds ZKP ile mühürlü W3C VC üretir.")
+    public ResponseEntity<Map<String, Object>> mintCustomVc(@RequestBody Map<String, Object> request) {
+        return ResponseEntity.ok(agentService.mintCustomChamberVc(request));
+    }
+
+    @ExceptionHandler(org.springframework.web.server.ResponseStatusException.class)
+    public ResponseEntity<Map<String, Object>> handleResponseStatus(org.springframework.web.server.ResponseStatusException ex) {
+        return ResponseEntity.status(ex.getStatusCode()).body(Map.of(
+                "status", "ERROR",
+                "errorType", "SCHEMA_ERROR",
+                "message", ex.getReason() != null ? ex.getReason() : ex.getMessage(),
+                "institutionId", agentService.getInstitutionId()
+        ));
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Map<String, Object>> handleIllegalArgument(IllegalArgumentException ex) {
+        return ResponseEntity.badRequest().body(Map.of(
+                "status", "ERROR",
+                "errorType", "VALIDATION_ERROR",
+                "message", ex.getMessage(),
+                "institutionId", agentService.getInstitutionId()
+        ));
+    }
+
     // -------------------------------------------------------------------------
     // Modeller (Kompakt Java 17 Records - Ayrı dosya gerektirmez)
     // -------------------------------------------------------------------------
@@ -127,13 +171,17 @@ public class IntegrationAgentController {
             List<PredicateRequirement> requestedPredicates,
             List<String> discloseAttributes,
             Map<String, Object> customAttributes,
-            String schemaName
+            String schemaName,
+            String datasetName
     ) {
         public AgentZkpProofRequest(String presentationRequestId, String nonce, List<PredicateRequirement> requestedPredicates, List<String> discloseAttributes) {
-            this(presentationRequestId, nonce, requestedPredicates, discloseAttributes, null, null);
+            this(presentationRequestId, nonce, requestedPredicates, discloseAttributes, null, null, null);
         }
         public AgentZkpProofRequest(String presentationRequestId, String nonce, List<PredicateRequirement> requestedPredicates, List<String> discloseAttributes, Map<String, Object> customAttributes) {
-            this(presentationRequestId, nonce, requestedPredicates, discloseAttributes, customAttributes, null);
+            this(presentationRequestId, nonce, requestedPredicates, discloseAttributes, customAttributes, null, null);
+        }
+        public AgentZkpProofRequest(String presentationRequestId, String nonce, List<PredicateRequirement> requestedPredicates, List<String> discloseAttributes, Map<String, Object> customAttributes, String schemaName) {
+            this(presentationRequestId, nonce, requestedPredicates, discloseAttributes, customAttributes, schemaName, null);
         }
     }
 
@@ -252,12 +300,18 @@ public class IntegrationAgentController {
             @JsonProperty("threshold") int threshold,
             @JsonProperty("totalParties") int totalParties,
             @JsonProperty("targetMetric") String targetMetric,
+            @JsonProperty("datasetName") String datasetName,
+            @JsonProperty("rawQuery") String rawQuery,
             @JsonProperty("requestedPredicates") List<PredicateRequirement> requestedPredicates,
             @JsonProperty("nonce") String nonce,
             @JsonProperty("overrideSecret") BigInteger overrideSecret,
             @JsonProperty("customAttributes") Map<String, Object> customAttributes,
             @JsonProperty("schemaName") String schemaName
-    ) {}
+    ) {
+        public AgentInitAndSplitRequest(String jobId, int partyId, int threshold, int totalParties, String targetMetric, List<PredicateRequirement> requestedPredicates, String nonce, BigInteger overrideSecret, Map<String, Object> customAttributes, String schemaName) {
+            this(jobId, partyId, threshold, totalParties, targetMetric, "gelir_gider", null, requestedPredicates, nonce, overrideSecret, customAttributes, schemaName);
+        }
+    }
 
     public record AgentInitAndSplitResponse(
             String institutionId,

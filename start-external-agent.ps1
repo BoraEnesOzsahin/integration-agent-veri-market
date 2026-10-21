@@ -61,23 +61,20 @@ try {
 
 # 3. JAR Dosyalarını Kontrol Et ve Gerekirse Derle
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$AgentJar = Join-Path $ScriptDir "target\integration_agent_node-1.0.0-SNAPSHOT.jar"
+$AgentJar = Join-Path $ScriptDir "agent_core\target\agent_core-1.0.0-SNAPSHOT.jar"
+if (-not (Test-Path $AgentJar)) {
+    $AgentJar = Join-Path $ScriptDir "target\integration_agent_node-1.0.0-SNAPSHOT.jar"
+}
 $ManagerJar = Join-Path $ScriptDir "manager_service\target\manager_service-1.0.0-SNAPSHOT.jar"
 
 Write-Host "`n>>> [ADIM 2] JAR Paketleri Kontrol Ediliyor..." -ForegroundColor Cyan
 
-if (-not (Test-Path $AgentJar)) {
-    Write-Host "  [DERLEME] integration_agent_node derleniyor..." -ForegroundColor Gray
+if (-not (Test-Path $AgentJar) -or -not (Test-Path $ManagerJar)) {
+    Write-Host "  [DERLEME] Multi-module proje (agent_core & manager_service) derleniyor..." -ForegroundColor Gray
     Push-Location $ScriptDir
     mvn clean package -DskipTests | Out-Null
     Pop-Location
-}
-
-if (-not (Test-Path $ManagerJar)) {
-    Write-Host "  [DERLEME] manager_service derleniyor..." -ForegroundColor Gray
-    Push-Location (Join-Path $ScriptDir "manager_service")
-    mvn clean package -DskipTests | Out-Null
-    Pop-Location
+    $AgentJar = Join-Path $ScriptDir "agent_core\target\agent_core-1.0.0-SNAPSHOT.jar"
 }
 
 Write-Host "  [OK] Agent ve Manager JAR paketleri hazır." -ForegroundColor Green

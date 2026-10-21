@@ -1,0 +1,1202 @@
+<!DOCTYPE html>
+<html lang="tr" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kurum İçi DMZ Entegrasyon Ajanı & ZKP Stüdyosu | Ayrotek</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.78);
+            backdrop-filter: blur(14px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .code-block {
+            font-family: 'JetBrains Mono', monospace;
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans selection:bg-emerald-500/30">
+
+    <!-- Üst Gezinme Çubuğu -->
+    <header class="border-b border-slate-800 bg-slate-900/60 backdrop-blur-md sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-600 via-blue-600 to-indigo-600 flex items-center justify-center text-white shadow-lg shadow-cyan-500/20">
+                    <i data-lucide="shield" class="w-5 h-5"></i>
+                </div>
+                <div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-[10px] font-bold text-cyan-400 tracking-wider uppercase px-1.5 py-0.5 rounded bg-cyan-950/70 border border-cyan-500/30">Kurum DMZ Güvenli Sınırı</span>
+                        <span id="header-node-badge" class="text-xs font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-bold">Banka_A</span>
+                    </div>
+                    <h1 id="header-inst-title" class="text-sm font-bold text-white tracking-tight">Firma A (Banka A) Kurum İçi DMZ Ajanı</h1>
+                </div>
+            </div>
+
+            <!-- Sağ Hızlı Durum ve Koordinatör Linki -->
+            <div class="flex items-center gap-3">
+                <div class="hidden md:flex items-center gap-2 text-xs">
+                    <span class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-950/40 border border-emerald-500/30 text-emerald-300">
+                        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                        <span class="font-medium">DMZ İçi Koruma Aktif (Sızıntı: 0)</span>
+                    </span>
+                    <span class="px-2.5 py-1 rounded-lg bg-slate-800 border border-slate-700 text-slate-300 font-mono text-[11px]" id="header-port-display">
+                        Port: 8083
+                    </span>
+                </div>
+                <a href="http://localhost:8081/portal.html" target="_blank" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition flex items-center gap-1.5 text-xs font-medium">
+                    <i data-lucide="external-link" class="w-3.5 h-3.5 text-slate-400"></i>
+                    <span>Merkezi Platform (8081)</span>
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <!-- Ana Gövde -->
+    <main class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 space-y-6">
+
+        <!-- Güvenlik ve İzolasyon Banner'ı -->
+        <div class="p-5 rounded-2xl bg-gradient-to-r from-slate-900 via-slate-900/90 to-cyan-950/30 border border-cyan-500/30 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div class="flex items-start gap-3.5">
+                <div class="p-2.5 rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 mt-0.5">
+                    <i data-lucide="lock" class="w-5 h-5"></i>
+                </div>
+                <div>
+                    <h2 class="text-sm font-bold text-white flex items-center gap-2">
+                        On-Premise DMZ Sıfır Bilgi (Zero-Knowledge) Koruma Bölgesi
+                        <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">Localhost Isolation</span>
+                    </h2>
+                    <p class="text-xs text-slate-300 mt-1 max-w-3xl leading-relaxed">
+                        Bu arayüz doğrudan kurumunuzun kendi DMZ sunucusunda çalışmaktadır. 
+                        <strong>Merkezi Koordinatör dahil hiçbir dış aktör yerel PostgreSQL veritabanınıza veya ham verilerinize erişemez.</strong> 
+                        Ham veriler içeride Pedersen Taahhüdü ($C = g^v \cdot h^r$) ve AnonCreds ZKP ile mühürlenir; dışarıya sadece kriptografik VC aktarılır.
+                    </p>
+                </div>
+            </div>
+            <div class="flex items-center gap-2 flex-shrink-0">
+                <button onclick="refreshAll()" class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition text-xs font-medium flex items-center gap-1.5 shadow-sm">
+                    <i data-lucide="refresh-cw" class="w-3.5 h-3.5 text-cyan-400"></i>
+                    <span>Yenile</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- 4 Sekmeli Ana Kontrol Paneli -->
+        <div class="flex border-b border-slate-800 text-xs font-medium gap-1 overflow-x-auto pb-px">
+            <button onclick="switchTab('db')" id="tab-btn-db" class="px-4 py-2.5 rounded-t-xl bg-cyan-600/20 text-cyan-300 border-b-2 border-cyan-500 flex items-center gap-2 font-semibold">
+                <i data-lucide="database" class="w-4 h-4"></i>
+                <span>1. Yerel Veritabanı & Şema Gezgini</span>
+            </button>
+            <button onclick="switchTab('designer')" id="tab-btn-designer" class="px-4 py-2.5 rounded-t-xl text-slate-400 hover:text-slate-200 hover:bg-slate-900/40 flex items-center gap-2">
+                <i data-lucide="sliders" class="w-4 h-4"></i>
+                <span>2. VC & ZKP Şema Tasarımcısı</span>
+            </button>
+            <button onclick="switchTab('preview')" id="tab-btn-preview" class="px-4 py-2.5 rounded-t-xl text-slate-400 hover:text-slate-200 hover:bg-slate-900/40 flex items-center gap-2">
+                <i data-lucide="file-check" class="w-4 h-4"></i>
+                <span>3. Mühürlü W3C VC & Kriptografik Denetim</span>
+            </button>
+            <button onclick="switchTab('chamber')" id="tab-btn-chamber" class="px-4 py-2.5 rounded-t-xl text-slate-400 hover:text-slate-200 hover:bg-slate-900/40 flex items-center gap-2">
+                <i data-lucide="send" class="w-4 h-4"></i>
+                <span>4. Data Chamber Odasına Gönder</span>
+            </button>
+        </div>
+
+        <!-- TAB 1: YEREL VERİTABANI & ŞEMA GEZGİNİ -->
+        <section id="tab-content-db" class="space-y-6">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <!-- DB Kart 1 -->
+                <div class="p-4 rounded-xl glass-panel border border-slate-800 space-y-2">
+                    <div class="flex items-center justify-between text-xs text-slate-400">
+                        <span>Bağlı Yerel Veritabanı</span>
+                        <i data-lucide="database" class="w-4 h-4 text-cyan-400"></i>
+                    </div>
+                    <div id="stat-db-url" class="text-sm font-bold text-white font-mono truncate">jdbc:postgresql://localhost:5439/...</div>
+                    <div class="flex items-center gap-1.5 text-[11px] text-emerald-400">
+                        <i data-lucide="check-circle-2" class="w-3.5 h-3.5"></i>
+                        <span>DMZ İçi Yerel Bağlantı Aktif</span>
+                    </div>
+                </div>
+
+                <!-- DB Kart 2 -->
+                <div class="p-4 rounded-xl glass-panel border border-slate-800 space-y-2">
+                    <div class="flex items-center justify-between text-xs text-slate-400">
+                        <span>Tespit Edilen Tablo Sayısı</span>
+                        <i data-lucide="table" class="w-4 h-4 text-indigo-400"></i>
+                    </div>
+                    <div id="stat-table-count" class="text-2xl font-black text-white">1</div>
+                    <div class="text-[11px] text-slate-400">PostgreSQL public şeması</div>
+                </div>
+
+                <!-- DB Kart 3 -->
+                <div class="p-4 rounded-xl glass-panel border border-slate-800 space-y-2">
+                    <div class="flex items-center justify-between text-xs text-slate-400">
+                        <span>ZKP Motoru (AnonCreds)</span>
+                        <i data-lucide="cpu" class="w-4 h-4 text-emerald-400"></i>
+                    </div>
+                    <div id="stat-zkp-engine" class="text-xs font-bold text-emerald-300">Port 3000 (Rust Native CL-Signatures)</div>
+                    <div class="text-[11px] text-slate-400">Predicates: $v \ge 0$ hazır</div>
+                </div>
+            </div>
+
+            <!-- Tablolar ve Kolonlar Detayı -->
+            <div class="p-6 rounded-2xl glass-panel border border-slate-800 space-y-5">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h3 class="text-sm font-bold text-white flex items-center gap-2">
+                            <i data-lucide="layers" class="w-4 h-4 text-cyan-400"></i>
+                            Yerel Veritabanı Tabloları & Kolon İnceleme
+                        </h3>
+                        <p class="text-xs text-slate-400 mt-0.5">Kurumun içeride tutulan tabloları ve şema yapısı aşağıda listelenmektedir.</p>
+                    </div>
+                    <span class="text-xs text-slate-400 font-mono">Şema: public</span>
+                </div>
+
+                <div id="tables-container" class="space-y-4">
+                    <!-- Dinamik Yüklenecek -->
+                    <div class="p-8 text-center text-slate-500 text-xs">Tablolar sorgulanıyor...</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 2: VC & ZKP ŞEMA TASARIMCISI -->
+        <section id="tab-content-designer" class="space-y-6 hidden">
+            <div class="p-6 sm:p-8 rounded-2xl glass-panel border border-slate-800 space-y-6">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+                    <div>
+                        <h3 class="text-base font-bold text-white flex items-center gap-2">
+                            <i data-lucide="sliders" class="w-5 h-5 text-indigo-400"></i>
+                            W3C VC Şema & İddia (Claim) Yapılandırıcı
+                        </h3>
+                        <p class="text-xs text-slate-400 mt-1">
+                            Yerel veritabanınızdan kolon seçerek şema oluşturun veya katılacağınız odanın beklediği şemayı doğrudan girerek uyumlu VC mühürleyin.
+                        </p>
+                    </div>
+
+                    <!-- Mod Değiştirici -->
+                    <div class="flex items-center gap-1.5 p-1 bg-slate-900 rounded-xl border border-slate-800 text-xs font-semibold flex-shrink-0">
+                        <button type="button" onclick="setDesignerMode('db')" id="mode-btn-db" class="px-3 py-1.5 rounded-lg bg-cyan-600 text-white shadow transition flex items-center gap-1.5">
+                            <i data-lucide="database" class="w-3.5 h-3.5"></i>
+                            <span>1. Yerel Tablodan Seç</span>
+                        </button>
+                        <button type="button" onclick="setDesignerMode('direct')" id="mode-btn-direct" class="px-3 py-1.5 rounded-lg text-slate-400 hover:text-slate-200 transition flex items-center gap-1.5">
+                            <i data-lucide="code-2" class="w-3.5 h-3.5"></i>
+                            <span>2. Doğrudan Şema Gir / Yapıştır</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- MERKEZİ ODADAN ŞEMA YAPIŞTIRMA & OTOMATİK UYARLAMA KUTUSU -->
+                <div class="p-4 rounded-xl bg-gradient-to-r from-indigo-950/60 via-slate-900 to-cyan-950/40 border border-indigo-500/40 space-y-3 shadow-lg">
+                    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div class="flex items-center gap-2.5">
+                            <div class="p-2 rounded-xl bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                                <i data-lucide="clipboard-paste" class="w-5 h-5"></i>
+                            </div>
+                            <div>
+                                <h4 class="text-xs font-bold text-white flex items-center gap-2">
+                                    Merkezi Odadan Kopyalanan Şemayı Buraya Yapıştırın
+                                    <span class="px-2 py-0.5 rounded-full text-[10px] bg-cyan-500/20 text-cyan-300 font-mono">1-Tıkla Şema Uyumu</span>
+                                </h4>
+                                <p class="text-[11px] text-slate-300 mt-0.5">
+                                    İlk firmanın kilitlediği oda şemasını kopyaladıysanız, panodan yapıştırarak ajanınızı bu şemaya anında uyarlayabilirsiniz.
+                                </p>
+                            </div>
+                        </div>
+                        <button type="button" onclick="pasteFromClipboardAndApply()" class="px-3.5 py-2 rounded-xl bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md shadow-cyan-600/20 transition active:scale-95 flex-shrink-0">
+                            <i data-lucide="clipboard" class="w-4 h-4"></i>
+                            <span>📋 Panodan Yapıştır & Otomatik Doldur</span>
+                        </button>
+                    </div>
+
+                    <div class="flex flex-col sm:flex-row gap-2 pt-1">
+                        <textarea id="quick-schema-paste-input" rows="2" placeholder='Oda Şablonu JSON veya alan listesi yapıştırın: {"chamberId":"chamber-alpha", "commitmentColumns":["kar","gelir","gider"], ...} veya kar, gelir, gider' class="flex-1 bg-slate-950/90 border border-slate-800 rounded-xl p-2.5 text-xs text-cyan-300 font-mono outline-none focus:border-cyan-500 transition"></textarea>
+                        <button type="button" onclick="applyQuickPastedSchema()" class="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 hover:border-cyan-500/50 text-xs font-semibold rounded-xl transition flex items-center justify-center gap-1.5 flex-shrink-0">
+                            <i data-lucide="check-circle" class="w-4 h-4 text-emerald-400"></i>
+                            <span>Şemaya Uyarla & Uygula</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- MOD 1: YEREL TABLODAN SEÇEREK ŞEMA OLUŞTURMA -->
+                <div id="designer-mode-db" class="space-y-6">
+                    <form id="schema-designer-form" onsubmit="handleMintCustomVc(event)" class="space-y-6 text-xs">
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <label class="block font-semibold text-slate-300 mb-1.5">Kaynak Veritabanı Tablosu</label>
+                                <select id="designer-table-select" onchange="onTableSelectChange()" class="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-200 focus:border-cyan-500 focus:outline-none">
+                                    <option value="gelir_gider">gelir_gider (Canlı Tablo)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block font-semibold text-slate-300 mb-1.5">Oda Kategorisi / Şema Alanı</label>
+                                <input type="text" id="designer-category" value="gelir_gider" class="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-200 font-mono focus:border-cyan-500 focus:outline-none">
+                            </div>
+                            <div>
+                                <label class="block font-semibold text-slate-300 mb-1.5">Hedef Data Chamber ID</label>
+                                <input type="text" id="designer-chamber-id" value="chamber-alpha" class="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-200 font-mono focus:border-cyan-500 focus:outline-none" placeholder="chamber-alpha">
+                            </div>
+                        </div>
+
+                        <!-- Kolon Yapılandırma Tablosu -->
+                        <div class="border border-slate-800 rounded-xl overflow-hidden">
+                            <div class="p-3 bg-slate-900/80 border-b border-slate-800 flex items-center justify-between">
+                                <span class="font-bold text-slate-200 text-xs">Kolon Bazlı Kriptografik Koruma & Şema Eşleme:</span>
+                                <span class="text-[11px] text-cyan-400 font-mono">Özel Anahtarsız Mühürleme</span>
+                            </div>
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-left">
+                                    <thead class="bg-slate-900/40 text-slate-400 text-[11px] uppercase border-b border-slate-800">
+                                        <tr>
+                                            <th class="p-3">Kolon Adı</th>
+                                            <th class="p-3">Veri Tipi</th>
+                                            <th class="p-3">🔒 Pedersen Taahhüdü ile Gizle</th>
+                                            <th class="p-3">🏷️ Açık Metaveri (Dönem/Yıl)</th>
+                                            <th class="p-3">AnonCreds ZKP İspatı</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="designer-columns-tbody" class="divide-y divide-slate-800 text-xs">
+                                        <!-- Dinamik Dolacak -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Butonlar -->
+                        <div class="space-y-3 pt-2">
+                            <div class="p-3.5 rounded-xl bg-gradient-to-br from-cyan-950/50 via-slate-900 to-slate-950 border border-cyan-500/40 space-y-2">
+                                <div class="text-[11px] text-cyan-300 font-semibold flex items-center gap-1.5">
+                                    <i data-lucide="download-cloud" class="w-3.5 h-3.5"></i>
+                                    <span>Önerilen Akış — Agent → Portal Yükleme</span>
+                                </div>
+                                <p class="text-[11px] text-slate-400 leading-snug">
+                                    VC'yi burada üretin ve <code class="text-cyan-300 font-mono">.json</code> olarak indirin.
+                                    Ardından <strong class="text-white">Merkezi Platform → Odaya Gir → VC Yükle</strong> bölümüne sürükleyin.
+                                </p>
+                                <button type="submit" id="btn-mint-custom" class="w-full py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold transition flex items-center justify-center gap-2 shadow-lg shadow-cyan-600/20">
+                                    <i data-lucide="download-cloud" class="w-4 h-4"></i>
+                                    <span>🔑 VC Üret & .json Olarak İndir</span>
+                                </button>
+                            </div>
+
+                            <div class="flex items-center gap-2">
+                                <div class="flex-1 border-t border-slate-800"></div>
+                                <span class="text-[10px] text-slate-600 font-mono">veya direkt gönder</span>
+                                <div class="flex-1 border-t border-slate-800"></div>
+                            </div>
+                            <button type="button" onclick="mintAndSendToChamber()" id="btn-mint-and-send" class="w-full py-2 rounded-xl bg-emerald-600/30 hover:bg-emerald-600/60 text-emerald-200 border border-emerald-500/40 font-semibold transition flex items-center justify-center gap-2 text-xs">
+                                <i data-lucide="send" class="w-4 h-4"></i>
+                                <span>Mühürle & Data Chamber'a Direkt Gönder</span>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- MOD 2: DOĞRUDAN HEDEF ŞEMA GİR / YAPIŞTIR -->
+                <div id="designer-mode-direct" class="space-y-6 hidden text-xs">
+                    <div class="p-4 rounded-xl bg-indigo-950/30 border border-indigo-500/30 space-y-2">
+                        <div class="flex items-center gap-2 text-indigo-300 font-bold">
+                            <i data-lucide="target" class="w-4 h-4"></i>
+                            <span>Hedef Data Chamber Şablonuna Göre Uyumlu VC Üret</span>
+                        </div>
+                        <p class="text-slate-300 text-[11px] leading-relaxed">
+                            Odaya katılmak istediğinizde, odanın beklediği şema alanlarını buraya girin veya JSON yapıştırın.
+                            Ajan, yerel veritabanınızdaki değerleri otomatik eşleyip bu şablona <strong>%100 uyumlu</strong> W3C VC üretecektir.
+                        </p>
+                    </div>
+
+                    <!-- Hızlı Şablon ve Koordinatörden Çekme Araçları -->
+                    <div class="flex flex-wrap items-center gap-2 p-3 bg-slate-900/60 rounded-xl border border-slate-800">
+                        <span class="text-[11px] font-semibold text-slate-400">⚡ Hızlı Şablonlar:</span>
+                        <button type="button" onclick="pasteFromClipboardAndApply()" class="px-2.5 py-1 rounded bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-500/40 text-[11px] font-semibold transition flex items-center gap-1">
+                            <i data-lucide="clipboard" class="w-3 h-3"></i>
+                            <span>📋 Panodan Şemayı Yapıştır</span>
+                        </button>
+                        <button type="button" onclick="applyDirectSchemaPreset('finance')" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] transition">
+                            🏦 Banka/Finans (kar, gelir, gider)
+                        </button>
+                        <button type="button" onclick="applyDirectSchemaPreset('credit')" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] transition">
+                            🛡️ Kredi Riski (skor, bakiye, limit)
+                        </button>
+                        <button type="button" onclick="fetchAndFillChamberSchema()" class="px-2.5 py-1 rounded bg-indigo-900/40 hover:bg-indigo-800/60 text-indigo-300 border border-indigo-500/30 text-[11px] transition flex items-center gap-1 ml-auto">
+                            <i data-lucide="refresh-cw" class="w-3 h-3"></i>
+                            <span>Odanın Kilitli Şemasını Çek</span>
+                        </button>
+                    </div>
+
+                    <form onsubmit="handleMintDirectSchema(event, false)" class="space-y-5">
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <label class="block font-semibold text-slate-300 mb-1.5">Hedef Data Chamber ID</label>
+                                <input type="text" id="direct-chamber-id" value="chamber-alpha" class="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-200 font-mono focus:border-indigo-500 focus:outline-none">
+                            </div>
+                            <div>
+                                <label class="block font-semibold text-slate-300 mb-1.5">Şema / Kategori Adı</label>
+                                <input type="text" id="direct-category" value="gelir_gider" class="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-200 font-mono focus:border-indigo-500 focus:outline-none">
+                            </div>
+                            <div>
+                                <label class="block font-semibold text-slate-300 mb-1.5">Eşlenecek Yerel Tablo</label>
+                                <select id="direct-table-select" class="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-200 focus:border-indigo-500 focus:outline-none">
+                                    <option value="gelir_gider">gelir_gider (Yerel DB Tablosu)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- 1. Alan Girişi: Pedersen Kolonları -->
+                        <div class="space-y-1.5">
+                            <label class="block font-semibold text-slate-300">
+                                🔒 1. Pedersen Taahhüdü ile Gizlenecek Şema Kolonları (Virgülle ayırın):
+                            </label>
+                            <input type="text" id="direct-commit-cols" value="kar, gelir, gider" class="w-full px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-cyan-300 font-mono text-xs focus:border-cyan-500 focus:outline-none" placeholder="kar, gelir, gider">
+                            <span class="block text-[11px] text-slate-500">
+                                Bu alanlar içeride Pedersen taahhüdü ($C = g^v \cdot h^r$) ve AnonCreds ZKP ile mühürlenir. Sayısal değerler gizli kalır.
+                            </span>
+                        </div>
+
+                        <!-- 2. Alan Girişi: Açık Metaveri Kolonları -->
+                        <div class="space-y-1.5">
+                            <label class="block font-semibold text-slate-300">
+                                🏷️ 2. Açık Metaveri Kolonları (Virgülle ayırın):
+                            </label>
+                            <input type="text" id="direct-public-cols" value="donem, yil" class="w-full px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-emerald-300 font-mono text-xs focus:border-emerald-500 focus:outline-none" placeholder="donem, yil">
+                            <span class="block text-[11px] text-slate-500">
+                                Bu alanlar filtrelenebilir açık metaveri olarak VC üzerinde görünür (Ör: donem ➔ 2026-Q4, yil ➔ 2026).
+                            </span>
+                        </div>
+
+                        <!-- 3. Alan Girişi: Alternatif Doğrudan JSON Şema Yapıştırma -->
+                        <div class="space-y-1.5 pt-2 border-t border-slate-800">
+                            <div class="flex items-center justify-between">
+                                <label class="font-semibold text-slate-300 flex items-center gap-1.5">
+                                    <i data-lucide="file-json" class="w-3.5 h-3.5 text-indigo-400"></i>
+                                    <span>Alternatif: Doğrudan JSON Şema Şablonu Yapıştır:</span>
+                                </label>
+                                <div class="flex items-center gap-2">
+                                    <button type="button" onclick="pasteFromClipboardAndApply()" class="text-[11px] text-cyan-400 hover:text-cyan-300 transition flex items-center gap-0.5">
+                                        <i data-lucide="clipboard" class="w-3 h-3"></i> Panodan Yapıştır
+                                    </button>
+                                    <span class="text-slate-600">|</span>
+                                    <button type="button" onclick="formatDirectJsonSchema()" class="text-[11px] text-indigo-400 hover:text-indigo-300 transition">JSON Biçimlendir</button>
+                                </div>
+                            </div>
+                            <textarea id="direct-json-schema" oninput="onDirectJsonSchemaInput()" rows="3" placeholder='{"chamberId": "chamber-alpha", "category": "gelir_gider", "commitmentColumns": ["kar", "gelir", "gider"], "publicColumns": ["donem", "yil"]}' class="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-[11px] text-indigo-300 font-mono focus:border-indigo-500 outline-none"></textarea>
+                            <span class="block text-[11px] text-slate-500">
+                                İsteğe bağlı: Yukarıdaki kutucuklar yerine odadan aldığınız JSON şablonunu doğrudan buraya yapıştırabilirsiniz.
+                            </span>
+                        </div>
+
+                        <!-- Butonlar -->
+                        <div class="space-y-3 pt-2">
+                            <button type="submit" id="btn-mint-direct" class="w-full py-3 rounded-xl bg-gradient-to-r from-indigo-600 via-cyan-600 to-indigo-600 hover:from-indigo-500 hover:to-cyan-500 text-white font-bold transition flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20 text-xs">
+                                <i data-lucide="download-cloud" class="w-4 h-4"></i>
+                                <span>🔑 Bu Şemaya Göre VC Üret & .json Olarak İndir</span>
+                            </button>
+                            <button type="button" onclick="handleMintDirectSchema(null, true)" class="w-full py-2.5 rounded-xl bg-emerald-600/30 hover:bg-emerald-600/60 text-emerald-200 border border-emerald-500/40 font-semibold transition flex items-center justify-center gap-2 text-xs">
+                                <i data-lucide="send" class="w-4 h-4"></i>
+                                <span>Mühürle & Data Chamber'a Direkt Gönder</span>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </section>
+
+
+        <!-- TAB 3: MÜHÜRLÜ W3C VC & KRİPTOGRAFİK DENETİM -->
+        <section id="tab-content-preview" class="space-y-6 hidden">
+            <div class="p-6 rounded-2xl glass-panel border border-slate-800 space-y-4">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h3 class="text-sm font-bold text-white flex items-center gap-2">
+                            <i data-lucide="file-code" class="w-4 h-4 text-cyan-400"></i>
+                            Mühürlü W3C Verifiable Credential (JSON-LD)
+                        </h3>
+                        <p class="text-xs text-slate-400 mt-0.5">Bu belge kurumun DMZ sınırlarında üretilmiştir. Ham değerler içeride kilitlenmiş, dışarı sadece taahhütler ve imzalar aktarılmıştır.</p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button onclick="copyVcJson()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs flex items-center gap-1.5">
+                            <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+                            <span>Kopyala</span>
+                        </button>
+                        <button onclick="downloadVcJson()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs flex items-center gap-1.5">
+                            <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                            <span>İndir (.json)</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Güvenlik Özeti Rozeti -->
+                <div id="vc-audit-badge" class="p-3.5 rounded-xl bg-slate-900 border border-emerald-500/30 text-xs text-emerald-300 flex items-center gap-3">
+                    <i data-lucide="shield-check" class="w-5 h-5 flex-shrink-0 text-emerald-400"></i>
+                    <div>
+                        <strong class="font-bold text-white block">SIFIR HAM VERİ SIZINTISI GÜVENCESİ (Zero Raw Leakage):</strong>
+                        <span id="vc-audit-text" class="text-slate-300 text-[11px]">Ham finansal değerler kurum DMZ bölgesinde kilitlendi. Koordinatöre sadece şifreli paylar ve Pedersen taahhütleri aktarıldı.</span>
+                    </div>
+                </div>
+
+                <div class="relative">
+                    <pre id="vc-json-display" class="w-full max-h-[500px] overflow-auto p-4 rounded-xl bg-slate-900/90 border border-slate-800 text-[11px] text-cyan-300 code-block leading-relaxed">// Henüz VC türetilmedi. 'VC Şema Tasarımcısı' sekmesinden mühürleme yapınız.</pre>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 4: DATA CHAMBER ODASINA GÖNDER -->
+        <section id="tab-content-chamber" class="space-y-6 hidden">
+            <div class="p-6 rounded-2xl glass-panel border border-slate-800 space-y-5">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h3 class="text-sm font-bold text-white flex items-center gap-2">
+                            <i data-lucide="send" class="w-4 h-4 text-emerald-400"></i>
+                            Merkezi Data Chamber Odalarına Doğrudan Yükleme
+                        </h3>
+                        <p class="text-xs text-slate-400 mt-0.5">Merkezi koordinatördeki (8081) aktif odalara kendi ürettiğiniz VC'yi teslim edin.</p>
+                    </div>
+                    <button onclick="fetchChambersList()" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs flex items-center gap-1.5">
+                        <i data-lucide="refresh-cw" class="w-3.5 h-3.5 text-cyan-400"></i>
+                        <span>Odaları Yenile</span>
+                    </button>
+                </div>
+
+                <!-- Odalar Tablosu -->
+                <div class="border border-slate-800 rounded-xl overflow-hidden">
+                    <table class="w-full text-left text-xs">
+                        <thead class="bg-slate-900/80 text-slate-400 text-[11px] uppercase border-b border-slate-800">
+                            <tr>
+                                <th class="p-3">Oda ID & Adı</th>
+                                <th class="p-3">Kategori</th>
+                                <th class="p-3">Oda Şeması</th>
+                                <th class="p-3">Durum</th>
+                                <th class="p-3 text-right">Eylem</th>
+                            </tr>
+                        </thead>
+                        <tbody id="chambers-list-tbody" class="divide-y divide-slate-800">
+                            <tr>
+                                <td colspan="5" class="p-4 text-center text-slate-500">Odalar yükleniyor...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Bildirim Toast Kutusu -->
+    <div id="toast" class="fixed bottom-6 right-6 z-50 transform transition-all duration-300 translate-y-20 opacity-0 pointer-events-none p-4 rounded-xl glass-panel border shadow-2xl max-w-md flex items-center gap-3 text-xs font-medium"></div>
+
+    <script>
+        const AGENT_URL = window.location.origin;
+        const COORD_URL = 'http://localhost:8081';
+
+        let currentAgentStatus = null;
+        let currentDbOverview = null;
+        let lastMintedVc = null;
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            await refreshAll();
+            lucide.createIcons();
+        });
+
+        async function refreshAll() {
+            await loadAgentStatus();
+            await loadDbOverview();
+            await fetchChambersList();
+        }
+
+        async function loadAgentStatus() {
+            try {
+                const res = await fetch(`${AGENT_URL}/api/v1/agent/status`);
+                if (!res.ok) throw new Error("Ajan durum bilgisi alınamadı");
+                const data = await res.json();
+                currentAgentStatus = data;
+
+                document.getElementById('header-inst-title').textContent = data.institutionName || 'Kurum DMZ Ajanı';
+                document.getElementById('header-node-badge').textContent = data.institutionId || 'NODE';
+                document.getElementById('header-port-display').textContent = `Port: ${data.environmentInfo?.serverPort || 8083}`;
+                document.getElementById('stat-zkp-engine').textContent = data.zkpProverEngine || 'AnonCreds';
+            } catch (err) {
+                console.error("Agent status error:", err);
+            }
+        }
+
+        async function loadDbOverview() {
+            try {
+                const res = await fetch(`${AGENT_URL}/api/v1/agent/db/overview`);
+                if (!res.ok) throw new Error("Veritabanı bilgisi alınamadı");
+                const data = await res.json();
+                currentDbOverview = data;
+
+                document.getElementById('stat-db-url').textContent = data.dbUrl || 'JDBC Tanımsız';
+                document.getElementById('stat-table-count').textContent = data.tables?.length || 0;
+
+                renderTablesView(data.tables || []);
+                renderDesignerColumns(data.tables || []);
+
+                const directTableSelect = document.getElementById('direct-table-select');
+                if (directTableSelect && data.tables && data.tables.length) {
+                    directTableSelect.innerHTML = data.tables.map(t => `<option value="${t.tableName}">${t.tableName} (${t.rowCount} satır)</option>`).join('');
+                }
+            } catch (err) {
+                console.error("DB Overview error:", err);
+                document.getElementById('tables-container').innerHTML = `
+                    <div class="p-4 rounded-xl bg-rose-950/30 border border-rose-500/30 text-rose-300 text-xs">
+                        Yerel veritabanı sorgulanamadı: ${err.message}
+                    </div>
+                `;
+            }
+        }
+
+        function renderTablesView(tables) {
+            const container = document.getElementById('tables-container');
+            if (!tables.length) {
+                container.innerHTML = `<div class="p-6 text-center text-slate-500 text-xs">Tablo bulunamadı.</div>`;
+                return;
+            }
+
+            container.innerHTML = tables.map(t => `
+                <div class="p-5 rounded-xl bg-slate-900/60 border border-slate-800 space-y-4">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-2.5">
+                            <div class="w-8 h-8 rounded-lg bg-cyan-500/20 text-cyan-300 flex items-center justify-center font-bold">
+                                <i data-lucide="table" class="w-4 h-4"></i>
+                            </div>
+                            <div>
+                                <h4 class="text-sm font-bold text-white font-mono">${t.tableName}</h4>
+                                <span class="text-[11px] text-slate-400">Kayıt Sayısı: <strong>${t.rowCount}</strong> satır</span>
+                            </div>
+                        </div>
+                        <button onclick="prefillDesigner('${t.tableName}')" class="px-3 py-1.5 rounded-lg bg-cyan-600/30 hover:bg-cyan-600/50 text-cyan-200 border border-cyan-500/30 text-xs font-medium transition flex items-center gap-1.5">
+                            <i data-lucide="sliders" class="w-3.5 h-3.5"></i>
+                            <span>Bu Tabloyla VC Tasarla</span>
+                        </button>
+                    </div>
+
+                    <div class="border border-slate-800 rounded-lg overflow-hidden">
+                        <table class="w-full text-left text-xs">
+                            <thead class="bg-slate-900/80 text-slate-400 text-[10px] uppercase border-b border-slate-800">
+                                <tr>
+                                    <th class="p-2.5">Kolon Adı</th>
+                                    <th class="p-2.5">Veri Tipi</th>
+                                    <th class="p-2.5">Güvenlik Önerisi</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-800">
+                                ${t.columns.map(c => `
+                                    <tr>
+                                        <td class="p-2.5 font-mono text-cyan-300 font-medium">${c.name}</td>
+                                        <td class="p-2.5 font-mono text-slate-400 text-[11px]">${c.type}</td>
+                                        <td class="p-2.5">
+                                            ${c.sensitiveCandidate ? `
+                                                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-amber-950/60 text-amber-300 border border-amber-500/30">
+                                                    🔒 Hassas Alan (Pedersen Taahhüdü ile Mühürlenmeli)
+                                                </span>
+                                            ` : `
+                                                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-slate-800 text-slate-400">
+                                                    🏷️ Açık Metaveri Adayı
+                                                </span>
+                                            `}
+                                        </td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `).join('');
+            lucide.createIcons();
+        }
+
+        function renderDesignerColumns(tables) {
+            const table = tables[0] || { columns: [] };
+            const tbody = document.getElementById('designer-columns-tbody');
+
+            tbody.innerHTML = table.columns.map(c => {
+                const isCommit = c.sensitiveCandidate;
+                const isPublic = !c.sensitiveCandidate;
+                return `
+                    <tr class="hover:bg-slate-900/40">
+                        <td class="p-3 font-mono font-bold text-white">${c.name}</td>
+                        <td class="p-3 font-mono text-slate-400 text-[11px]">${c.type}</td>
+                        <td class="p-3">
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" name="commit-col" value="${c.name}" ${isCommit ? 'checked' : ''} class="w-4 h-4 rounded border-slate-700 bg-slate-900 text-cyan-600 focus:ring-0">
+                                <span class="text-[11px] text-cyan-300 font-medium">Pedersen ($C = g^v h^r$)</span>
+                            </label>
+                        </td>
+                        <td class="p-3">
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" name="public-col" value="${c.name}" ${isPublic ? 'checked' : ''} class="w-4 h-4 rounded border-slate-700 bg-slate-900 text-emerald-600 focus:ring-0">
+                                <span class="text-[11px] text-slate-300">Açık Metin</span>
+                            </label>
+                        </td>
+                        <td class="p-3">
+                            ${isCommit ? `
+                                <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-950/60 text-indigo-300 border border-indigo-500/30">
+                                    AnonCreds: ${c.name} &gt;= 0
+                                </span>
+                            ` : `<span class="text-slate-600 text-[10px]">-</span>`}
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function prefillDesigner(tableName) {
+            document.getElementById('designer-table-select').value = tableName;
+            switchTab('designer');
+        }
+
+        function onTableSelectChange() {
+            if (currentDbOverview && currentDbOverview.tables) {
+                renderDesignerColumns(currentDbOverview.tables);
+            }
+        }
+
+        async function handleMintCustomVc(e) {
+            if (e) e.preventDefault();
+            const btn = document.getElementById('btn-mint-custom');
+            btn.disabled = true;
+            btn.classList.add('opacity-50');
+
+            try {
+                showToast("Yerel PostgreSQL sorgulanıyor ve Pedersen taahhütleri üretiliyor...", "info");
+
+                const chamberId = document.getElementById('designer-chamber-id').value.trim() || 'chamber-alpha';
+                const category = document.getElementById('designer-category').value.trim() || 'gelir_gider';
+                const tableName = document.getElementById('designer-table-select').value || 'gelir_gider';
+
+                const commitCols = Array.from(document.querySelectorAll('input[name="commit-col"]:checked')).map(el => el.value);
+                const publicCols = Array.from(document.querySelectorAll('input[name="public-col"]:checked')).map(el => el.value);
+
+                const payload = {
+                    chamberId: chamberId,
+                    category: category,
+                    tableName: tableName,
+                    commitmentColumns: commitCols,
+                    publicColumns: publicCols
+                };
+
+                const res = await fetch(`${AGENT_URL}/api/v1/agent/chamber/mint-custom`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!res.ok) {
+                    const err = await res.json();
+                    throw new Error(err.message || "VC türetilemedi");
+                }
+
+                const data = await res.json();
+                lastMintedVc = data;
+
+                showToast(`✅ W3C VC başarıyla mühürlendi! (${commitCols.length} gizli taahhüt) — Dosya indiriliyor...`, "success");
+                displayVcPreview(data);
+                // Otomatik indir: kullanıcı portal'a sürükleyip yükleyecek
+                downloadVcJson();
+                switchTab('preview');
+
+            } catch (err) {
+                showToast(err.message, "error");
+            } finally {
+                btn.disabled = false;
+                btn.classList.remove('opacity-50');
+            }
+        }
+
+        async function uploadVcToChamber(chamberId, rawVcJson) {
+            try {
+                showToast(`Data Chamber'a (${chamberId}) mühürlü VC yükleniyor...`, "info");
+                const res = await fetch(`${COORD_URL}/api/v1/chambers/${chamberId}/upload-vc`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        nodeId: currentAgentStatus?.institutionId || 'Banka_A',
+                        rawVcJson: rawVcJson
+                    })
+                });
+
+                if (!res.ok) {
+                    const err = await res.json();
+                    throw new Error(err.message || "Odaya VC yüklenemedi!");
+                }
+
+                const p = await res.json();
+                showToast(`🎯 Tebrikler! VC odaya başarıyla kabul edildi. Şema doğrulandı (${p.detectedSchema?.length} alan).`, "success");
+                switchTab('chamber');
+                await fetchChambersList();
+            } catch (err) {
+                showToast(`❌ Oda Hatası: ${err.message}`, "error");
+            }
+        }
+
+        async function mintAndSendToChamber() {
+            await handleMintCustomVc(null);
+            if (!lastMintedVc || !lastMintedVc.rawVcJson) return;
+
+            const chamberId = document.getElementById('designer-chamber-id').value.trim() || 'chamber-alpha';
+            await uploadVcToChamber(chamberId, lastMintedVc.rawVcJson);
+        }
+
+        function setDesignerMode(mode) {
+            const btnDb = document.getElementById('mode-btn-db');
+            const btnDirect = document.getElementById('mode-btn-direct');
+            const divDb = document.getElementById('designer-mode-db');
+            const divDirect = document.getElementById('designer-mode-direct');
+
+            if (mode === 'direct') {
+                btnDirect.className = "px-3 py-1.5 rounded-lg bg-indigo-600 text-white shadow transition flex items-center gap-1.5";
+                btnDb.className = "px-3 py-1.5 rounded-lg text-slate-400 hover:text-slate-200 transition flex items-center gap-1.5";
+                divDirect.classList.remove('hidden');
+                divDb.classList.add('hidden');
+            } else {
+                btnDb.className = "px-3 py-1.5 rounded-lg bg-cyan-600 text-white shadow transition flex items-center gap-1.5";
+                btnDirect.className = "px-3 py-1.5 rounded-lg text-slate-400 hover:text-slate-200 transition flex items-center gap-1.5";
+                divDb.classList.remove('hidden');
+                divDirect.classList.add('hidden');
+            }
+            lucide.createIcons();
+        }
+
+        function applyDirectSchemaPreset(type) {
+            if (type === 'finance') {
+                document.getElementById('direct-category').value = 'gelir_gider';
+                document.getElementById('direct-commit-cols').value = 'kar, gelir, gider';
+                document.getElementById('direct-public-cols').value = 'donem, yil';
+                document.getElementById('direct-json-schema').value = JSON.stringify({
+                    chamberId: document.getElementById('direct-chamber-id').value || 'chamber-alpha',
+                    category: 'gelir_gider',
+                    commitmentColumns: ['kar', 'gelir', 'gider'],
+                    publicColumns: ['donem', 'yil']
+                }, null, 2);
+                showToast("🏦 Finans/Banka şeması yüklendi (kar, gelir, gider, donem, yil)", "info");
+            } else if (type === 'credit') {
+                document.getElementById('direct-category').value = 'kredi_riski';
+                document.getElementById('direct-commit-cols').value = 'kredi_skoru, gelir, bakiye';
+                document.getElementById('direct-public-cols').value = 'risk_derecesi, yil';
+                document.getElementById('direct-json-schema').value = JSON.stringify({
+                    chamberId: document.getElementById('direct-chamber-id').value || 'chamber-beta',
+                    category: 'kredi_riski',
+                    commitmentColumns: ['kredi_skoru', 'gelir', 'bakiye'],
+                    publicColumns: ['risk_derecesi', 'yil']
+                }, null, 2);
+                showToast("🛡️ Kredi risk şeması yüklendi (kredi_skoru, gelir, bakiye...)", "info");
+            }
+        }
+
+        async function fetchAndFillChamberSchema() {
+            try {
+                showToast("Koordinatörden aktif odaların kilitli şemaları sorgulanıyor...", "info");
+                const res = await fetch(`${COORD_URL}/api/v1/chambers`);
+                if (!res.ok) throw new Error("Koordinatöre ulaşılamadı");
+                const chambers = await res.json();
+                const targetId = document.getElementById('direct-chamber-id').value.trim();
+                const ch = chambers.find(c => c.id === targetId) || chambers[0];
+                if (!ch) {
+                    showToast("Aktif bir oda bulunamadı!", "warning");
+                    return;
+                }
+
+                document.getElementById('direct-chamber-id').value = ch.id;
+                document.getElementById('direct-category').value = ch.category || 'gelir_gider';
+                
+                const reqAttrs = ch.requiredSchemaAttributes || ['kar', 'gelir', 'gider'];
+                const commits = reqAttrs.filter(a => !['donem', 'yil', 'risk_derecesi'].includes(a.toLowerCase()));
+                const publics = reqAttrs.filter(a => ['donem', 'yil', 'risk_derecesi'].includes(a.toLowerCase()));
+                
+                document.getElementById('direct-commit-cols').value = commits.join(', ');
+                document.getElementById('direct-public-cols').value = (publics.length ? publics : ['donem', 'yil']).join(', ');
+                document.getElementById('direct-json-schema').value = JSON.stringify({
+                    chamberId: ch.id,
+                    category: ch.category || 'gelir_gider',
+                    commitmentColumns: commits,
+                    publicColumns: publics.length ? publics : ['donem', 'yil']
+                }, null, 2);
+
+                showToast(`🎯 [${ch.name}] odasının kilitli şeması başarıyla çekildi! (${reqAttrs.join(', ')})`, "success");
+            } catch (err) {
+                showToast(`Şema çekilemedi: ${err.message}`, "error");
+            }
+        }
+
+        function parseAndApplySchema(rawText) {
+            if (!rawText || !rawText.trim()) {
+                showToast("Lütfen geçerli bir şema metni veya JSON yapıştırın!", "warning");
+                return false;
+            }
+            const trimmed = rawText.trim();
+            let chamberId = '';
+            let category = '';
+            let commitCols = [];
+            let publicCols = [];
+            let requiredAttrs = [];
+
+            const metadataNames = ['donem', 'yil', 'period', 'year', 'risk_derecesi', 'sektor_kodu', 'meta'];
+
+            if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+                try {
+                    const obj = JSON.parse(trimmed);
+                    chamberId = obj.chamberId || obj.id || '';
+                    category = obj.category || '';
+
+                    if (Array.isArray(obj.commitmentColumns) && obj.commitmentColumns.length) {
+                        commitCols = obj.commitmentColumns.map(s => String(s).trim());
+                    }
+                    if (Array.isArray(obj.publicColumns) && obj.publicColumns.length) {
+                        publicCols = obj.publicColumns.map(s => String(s).trim());
+                    }
+
+                    if (Array.isArray(obj.requiredSchemaAttributes) && obj.requiredSchemaAttributes.length) {
+                        requiredAttrs = obj.requiredSchemaAttributes.map(s => String(s).trim());
+                    }
+
+                    if (!commitCols.length && requiredAttrs.length) {
+                        commitCols = requiredAttrs.filter(a => !metadataNames.includes(a.toLowerCase()));
+                        publicCols = requiredAttrs.filter(a => metadataNames.includes(a.toLowerCase()));
+                    }
+
+                    if (!commitCols.length && Array.isArray(obj.detectedSchema)) {
+                        obj.detectedSchema.forEach(f => {
+                            if (f.encrypted) commitCols.push(f.fieldName);
+                            else publicCols.push(f.fieldName);
+                        });
+                    }
+                } catch (e) {
+                    showToast("JSON çözümlenemedi: " + e.message, "error");
+                    return false;
+                }
+            } else if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+                try {
+                    const arr = JSON.parse(trimmed);
+                    if (Array.isArray(arr)) {
+                        requiredAttrs = arr.map(s => String(s).trim());
+                        commitCols = requiredAttrs.filter(a => !metadataNames.includes(a.toLowerCase()));
+                        publicCols = requiredAttrs.filter(a => metadataNames.includes(a.toLowerCase()));
+                    }
+                } catch (e) {
+                    showToast("Dizi çözümlenemedi: " + e.message, "error");
+                    return false;
+                }
+            } else {
+                const items = trimmed.split(',').map(s => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
+                if (items.length) {
+                    requiredAttrs = items;
+                    commitCols = items.filter(a => !metadataNames.includes(a.toLowerCase()));
+                    publicCols = items.filter(a => metadataNames.includes(a.toLowerCase()));
+                }
+            }
+
+            if (!commitCols.length && !publicCols.length) {
+                showToast("Şemada geçerli bir kolon tespit edilemedi!", "error");
+                return false;
+            }
+
+            if (!publicCols.length) {
+                publicCols = ['donem', 'yil'];
+            }
+
+            switchTab('designer');
+            setDesignerMode('direct');
+
+            if (chamberId) {
+                document.getElementById('direct-chamber-id').value = chamberId;
+                const desCh = document.getElementById('designer-chamber-id');
+                if (desCh) desCh.value = chamberId;
+            }
+            if (category) {
+                document.getElementById('direct-category').value = category;
+                const desCat = document.getElementById('designer-category');
+                if (desCat) desCat.value = category;
+            }
+
+            document.getElementById('direct-commit-cols').value = commitCols.join(', ');
+            document.getElementById('direct-public-cols').value = publicCols.join(', ');
+
+            const fullJson = {
+                chamberId: document.getElementById('direct-chamber-id').value || 'chamber-alpha',
+                category: document.getElementById('direct-category').value || 'gelir_gider',
+                commitmentColumns: commitCols,
+                publicColumns: publicCols,
+                requiredSchemaAttributes: [...commitCols, ...publicCols]
+            };
+
+            document.getElementById('direct-json-schema').value = JSON.stringify(fullJson, null, 2);
+
+            ['direct-chamber-id', 'direct-category', 'direct-commit-cols', 'direct-public-cols', 'direct-json-schema'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    el.classList.add('ring-2', 'ring-cyan-400', 'bg-cyan-950/20');
+                    setTimeout(() => {
+                        el.classList.remove('ring-2', 'ring-cyan-400', 'bg-cyan-950/20');
+                    }, 2500);
+                }
+            });
+
+            showToast(`🎯 Şema başarıyla uygulandı! (${commitCols.length} gizli taahhüt: [${commitCols.join(', ')}], ${publicCols.length} açık alan: [${publicCols.join(', ')}]). Şimdi 'VC Üret' butonuna basabilirsiniz.`, "success");
+            return true;
+        }
+
+        async function pasteFromClipboardAndApply() {
+            try {
+                if (!navigator.clipboard || !navigator.clipboard.readText) {
+                    showToast("Tarayıcı panoya erişim izni vermedi. Lütfen metni aşağıdaki kutucuğa yapıştırın.", "warning");
+                    const qInput = document.getElementById('quick-schema-paste-input');
+                    if (qInput) qInput.focus();
+                    return;
+                }
+                const text = await navigator.clipboard.readText();
+                if (!text || !text.trim()) {
+                    showToast("Pano boş! Önce merkezi platformdaki 'Şemayı Kopyala' butonuna tıklayın.", "warning");
+                    return;
+                }
+                const qInput = document.getElementById('quick-schema-paste-input');
+                if (qInput) qInput.value = text;
+                parseAndApplySchema(text);
+            } catch (err) {
+                showToast("Panodan okunamadı: " + err.message + ". Metni aşağıdaki kutucuğa yapıştırıp 'Şemaya Uyarla' butonuna basabilirsiniz.", "warning");
+                const qInput = document.getElementById('quick-schema-paste-input');
+                if (qInput) qInput.focus();
+            }
+        }
+
+        function applyQuickPastedSchema() {
+            const text = document.getElementById('quick-schema-paste-input').value;
+            parseAndApplySchema(text);
+        }
+
+        function onDirectJsonSchemaInput() {
+            const val = document.getElementById('direct-json-schema').value.trim();
+            if (val.startsWith('{') && val.endsWith('}')) {
+                try {
+                    const obj = JSON.parse(val);
+                    if (obj.chamberId) document.getElementById('direct-chamber-id').value = obj.chamberId;
+                    if (obj.category) document.getElementById('direct-category').value = obj.category;
+                    if (Array.isArray(obj.commitmentColumns) && obj.commitmentColumns.length) {
+                        document.getElementById('direct-commit-cols').value = obj.commitmentColumns.join(', ');
+                    }
+                    if (Array.isArray(obj.publicColumns) && obj.publicColumns.length) {
+                        document.getElementById('direct-public-cols').value = obj.publicColumns.join(', ');
+                    }
+                } catch (e) {
+                    // Still typing JSON
+                }
+            }
+        }
+
+        function formatDirectJsonSchema() {
+            const val = document.getElementById('direct-json-schema').value.trim();
+            if (!val) return;
+            try {
+                const parsed = JSON.parse(val);
+                document.getElementById('direct-json-schema').value = JSON.stringify(parsed, null, 2);
+                showToast("JSON formatlandı", "info");
+            } catch (e) {
+                showToast("Geçersiz JSON: " + e.message, "error");
+            }
+        }
+
+        async function handleMintDirectSchema(e, sendDirectly = false) {
+            if (e) e.preventDefault();
+            const btn = document.getElementById('btn-mint-direct');
+            if (btn) { btn.disabled = true; btn.classList.add('opacity-50'); }
+
+            try {
+                showToast("Hedef şablon çözümleniyor ve W3C VC mühürleniyor...", "info");
+                let payload = {};
+
+                const rawJson = document.getElementById('direct-json-schema').value.trim();
+                if (rawJson) {
+                    try {
+                        payload = JSON.parse(rawJson);
+                    } catch (parseErr) {
+                        throw new Error("JSON Şema kutusundaki metin geçerli bir JSON değil: " + parseErr.message);
+                    }
+                }
+
+                if (!payload.chamberId) payload.chamberId = document.getElementById('direct-chamber-id').value.trim() || 'chamber-alpha';
+                if (!payload.category) payload.category = document.getElementById('direct-category').value.trim() || 'gelir_gider';
+                if (!payload.tableName) payload.tableName = document.getElementById('direct-table-select').value || 'gelir_gider';
+
+                const metadataKeys = ['donem', 'yil', 'period', 'year', 'risk_derecesi', 'sektor_kodu', 'meta'];
+
+                if (!payload.commitmentColumns || !payload.commitmentColumns.length) {
+                    if (payload.requiredSchemaAttributes && payload.requiredSchemaAttributes.length) {
+                        payload.commitmentColumns = payload.requiredSchemaAttributes.filter(a => !metadataKeys.includes(a.toLowerCase()));
+                        if (!payload.publicColumns || !payload.publicColumns.length) {
+                            payload.publicColumns = payload.requiredSchemaAttributes.filter(a => metadataKeys.includes(a.toLowerCase()));
+                        }
+                    } else {
+                        const commitText = document.getElementById('direct-commit-cols').value.trim();
+                        payload.commitmentColumns = commitText ? commitText.split(',').map(s => s.trim()).filter(Boolean) : ['kar', 'gelir', 'gider'];
+                    }
+                }
+                if (!payload.publicColumns || !payload.publicColumns.length) {
+                    const publicText = document.getElementById('direct-public-cols').value.trim();
+                    payload.publicColumns = publicText ? publicText.split(',').map(s => s.trim()).filter(Boolean) : ['donem', 'yil'];
+                }
+
+                const res = await fetch(`${AGENT_URL}/api/v1/agent/chamber/mint-custom`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!res.ok) {
+                    const err = await res.json();
+                    throw new Error(err.message || "Doğrudan şemaya göre VC üretilemedi");
+                }
+
+                const data = await res.json();
+                lastMintedVc = data;
+
+                showToast(`✅ [${payload.chamberId}] Şemasına %100 uyumlu VC mühürlendi! Dosya indiriliyor...`, "success");
+                displayVcPreview(data);
+                downloadVcJson();
+                switchTab('preview');
+
+                if (sendDirectly) {
+                    await uploadVcToChamber(payload.chamberId, data.rawVcJson);
+                }
+            } catch (err) {
+                showToast(err.message, "error");
+            } finally {
+                if (btn) { btn.disabled = false; btn.classList.remove('opacity-50'); }
+            }
+        }
+
+        function displayVcPreview(data) {
+            document.getElementById('vc-json-display').textContent = data.rawVcJson || JSON.stringify(data, null, 2);
+            document.getElementById('vc-audit-text').textContent = data.securityAudit?.guarantee || 'DMZ içi koruma tamamlandı.';
+        }
+
+        async function fetchChambersList() {
+            const tbody = document.getElementById('chambers-list-tbody');
+            try {
+                const res = await fetch(`${COORD_URL}/api/v1/chambers`);
+                if (!res.ok) throw new Error("Koordinatör odaları listelenemedi");
+                const chambers = await res.json();
+
+                if (!chambers.length) {
+                    tbody.innerHTML = `<tr><td colspan="5" class="p-4 text-center text-slate-500">Açık oda bulunamadı.</td></tr>`;
+                    return;
+                }
+
+                tbody.innerHTML = chambers.map(ch => {
+                    const reqSchema = ch.requiredSchemaAttributes?.length ? ch.requiredSchemaAttributes.join(', ') : '<span class="text-amber-400 font-italic">İlk Giren Tarafından Belirlenecek</span>';
+                    const isReady = ch.status === 'READY';
+                    return `
+                        <tr class="hover:bg-slate-900/40">
+                            <td class="p-3">
+                                <div class="font-bold text-white font-mono">${ch.id}</div>
+                                <div class="text-[11px] text-slate-400">${ch.name}</div>
+                            </td>
+                            <td class="p-3 font-mono text-cyan-300 text-[11px]">${ch.category}</td>
+                            <td class="p-3 font-mono text-[11px] text-slate-300">${reqSchema}</td>
+                            <td class="p-3">
+                                <span class="px-2 py-0.5 rounded text-[10px] font-bold ${isReady ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30' : 'bg-slate-800 text-slate-300'}">
+                                    ${ch.status}
+                                </span>
+                            </td>
+                            <td class="p-3 text-right">
+                                <div class="flex items-center justify-end gap-1.5">
+                                    ${ch.requiredSchemaAttributes?.length ? `
+                                        <button onclick="adoptChamberSchema('${ch.id}')" class="px-2.5 py-1 rounded-lg bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-500/40 text-[11px] font-semibold transition" title="Bu odanın referans şemasını kopyala ve Tasarımcıya yükle">
+                                            🎯 Şemayı Al & Uyarla
+                                        </button>
+                                    ` : ''}
+                                    <button onclick="selectChamberForUpload('${ch.id}', '${ch.category}')" class="px-2.5 py-1 rounded-lg bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-200 border border-emerald-500/30 text-[11px] font-medium transition">
+                                        Bu Odaya Gönder
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+            } catch (err) {
+                tbody.innerHTML = `<tr><td colspan="5" class="p-4 text-center text-rose-400">Koordinatöre bağlanılamadı (${err.message})</td></tr>`;
+            }
+        }
+
+        function adoptChamberSchema(chamberId) {
+            document.getElementById('direct-chamber-id').value = chamberId;
+            switchTab('designer');
+            setDesignerMode('direct');
+            fetchAndFillChamberSchema();
+        }
+
+        function selectChamberForUpload(chamberId, category) {
+            document.getElementById('designer-chamber-id').value = chamberId;
+            document.getElementById('designer-category').value = category;
+            switchTab('designer');
+            showToast(`Oda seçildi: ${chamberId}. Şimdi 'Mühürle & Data Chamber'a Gönder' butonuna basabilirsiniz.`, 'info');
+        }
+
+        function switchTab(tabId) {
+            const tabs = ['db', 'designer', 'preview', 'chamber'];
+            tabs.forEach(t => {
+                const btn = document.getElementById(`tab-btn-${t}`);
+                const content = document.getElementById(`tab-content-${t}`);
+                if (t === tabId) {
+                    btn.className = "px-4 py-2.5 rounded-t-xl bg-cyan-600/20 text-cyan-300 border-b-2 border-cyan-500 flex items-center gap-2 font-semibold";
+                    content.classList.remove('hidden');
+                } else {
+                    btn.className = "px-4 py-2.5 rounded-t-xl text-slate-400 hover:text-slate-200 hover:bg-slate-900/40 flex items-center gap-2";
+                    content.classList.add('hidden');
+                }
+            });
+            lucide.createIcons();
+        }
+
+        function copyVcJson() {
+            const txt = document.getElementById('vc-json-display').textContent;
+            navigator.clipboard.writeText(txt);
+            showToast("W3C VC JSON panoya kopyalandı!", "success");
+        }
+
+        function downloadVcJson() {
+            const txt = document.getElementById('vc-json-display').textContent;
+            const blob = new Blob([txt], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `vc-${currentAgentStatus?.institutionId || 'node'}-${Date.now()}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+            showToast("VC JSON dosyası indirildi!", "success");
+        }
+
+        function showToast(msg, type = 'info') {
+            const toast = document.getElementById('toast');
+            toast.textContent = msg;
+            toast.className = `fixed bottom-6 right-6 z-50 transform transition-all duration-300 p-4 rounded-xl glass-panel border shadow-2xl max-w-md flex items-center gap-3 text-xs font-medium ${
+                type === 'success' ? 'border-emerald-500/40 text-emerald-300 bg-emerald-950/80' :
+                type === 'error' ? 'border-rose-500/40 text-rose-300 bg-rose-950/80' :
+                'border-cyan-500/40 text-cyan-300 bg-slate-900/90'
+            }`;
+            toast.classList.remove('translate-y-20', 'opacity-0', 'pointer-events-none');
+            setTimeout(() => {
+                toast.classList.add('translate-y-20', 'opacity-0', 'pointer-events-none');
+            }, 4000);
+        }
+    </script>
+</body>
+</html>

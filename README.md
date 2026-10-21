@@ -48,9 +48,8 @@ chmod +x start-external-agent.sh
 Eğer script yerine doğrudan JAR dosyalarını çalıştırmak isterseniz:
 
 ```bash
-# 1. Projeleri derleyin:
+# 1. Multi-Module Projeyi tek komutla derleyin (agent_core ve manager_service birlikte derlenir):
 mvn clean package -DskipTests
-cd manager_service && mvn clean package -DskipTests && cd ..
 
 # 2. Sidecar Manager'ı Başlatın (Port 8093):
 java -jar manager_service/target/manager_service-1.0.0-SNAPSHOT.jar \
@@ -62,7 +61,7 @@ java -jar manager_service/target/manager_service-1.0.0-SNAPSHOT.jar \
   --node.coordinator-url=http://<COORDINATOR_IP>:8081
 
 # 3. Entegrasyon Ajanını Başlatın (Port 8083):
-java -jar target/integration_agent_node-1.0.0-SNAPSHOT.jar \
+java -jar agent_core/target/agent_core-1.0.0-SNAPSHOT.jar \
   --server.port=8083 \
   --agent.institution-id=Banka_B \
   --agent.institution-name="Banka B Harici Şube" \

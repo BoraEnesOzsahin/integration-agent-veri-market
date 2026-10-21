@@ -10,9 +10,17 @@ agent:
   institution-name: ${AGENT_NAME:Banka A Kurum İçi Entegrasyon Ajanı}
   default-secret: ${AGENT_DEFAULT_SECRET:50000}
   public-url: ${AGENT_PUBLIC_URL:http://localhost:8083}
+  default-consumer-public-key: ${AGENT_CONSUMER_PUBLIC_KEY:}
   heartbeat:
     enabled: ${AGENT_HEARTBEAT_ENABLED:true}
     interval-ms: 10000
+  attributes:
+    income: ${AGENT_INCOME:50000}
+    bakiye: ${AGENT_BAKIYE:50000}
+    credit_score: ${AGENT_CREDIT_SCORE:1350}
+    salary: ${AGENT_SALARY:50000}
+    sample_size: ${AGENT_SAMPLE_SIZE:150000}
+    risk_level: ${AGENT_RISK_LEVEL:LOW}
 
 coordinator:
   url: ${COORDINATOR_URL:http://localhost:8081}
