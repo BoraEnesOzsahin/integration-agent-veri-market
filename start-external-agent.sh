@@ -48,7 +48,11 @@ echo -e "\033[32m  [BİLGİ] Kurum Kimliği (NodeId) : ${NODE_ID}\033[0m"
 echo -e "\033[32m  [BİLGİ] Kurum Adı              : ${NODE_NAME}\033[0m"
 echo -e "\033[32m  [BİLGİ] Ajan İletişim URL'i    : ${AGENT_PUBLIC_URL}\033[0m"
 echo -e "\033[32m  [BİLGİ] Manager İletişim URL'i : ${MANAGER_PUBLIC_URL}\033[0m"
-echo -e "\033[33m  [BİLGİ] Hedef Coordinator      : ${COORDINATOR_URL}\033[0m\n"
+echo -e "\033[33m  [BİLGİ] Hedef Coordinator      : ${COORDINATOR_URL}\033[0m"
+echo -e "\033[36m  [BİLGİ] Veritabanı URL (JDBC)  : ${EFFECTIVE_DB_URL}\033[0m"
+echo -e "\033[36m  [BİLGİ] Veritabanı Kullanıcısı : ${DB_USER}\033[0m"
+echo -e "\033[36m  [BİLGİ] Veritabanı Adı / Port  : ${DB_NAME} (Port: ${DB_PORT})\033[0m"
+echo -e "\033[36m  [BİLGİ] Desteklenen Veri Seti  : ${SUPPORTED_DATASETS}\033[0m\n"
 
 # 2. Çalışma Modu
 HAS_DOCKER=false
