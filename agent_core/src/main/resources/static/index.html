@@ -555,6 +555,15 @@
                 if (directTableSelect && data.tables && data.tables.length) {
                     directTableSelect.innerHTML = data.tables.map(t => `<option value="${t.tableName}">${t.tableName} (${t.rowCount} satır)</option>`).join('');
                 }
+
+                const designerTableSelect = document.getElementById('designer-table-select');
+                if (designerTableSelect && data.tables && data.tables.length) {
+                    const currentVal = designerTableSelect.value;
+                    designerTableSelect.innerHTML = data.tables.map(t => `<option value="${t.tableName}">${t.tableName} (${t.rowCount} satır)</option>`).join('');
+                    if (data.tables.some(t => t.tableName === currentVal)) {
+                        designerTableSelect.value = currentVal;
+                    }
+                }
             } catch (err) {
                 console.error("DB Overview error:", err);
                 document.getElementById('tables-container').innerHTML = `
@@ -626,7 +635,11 @@
         }
 
         function renderDesignerColumns(tables) {
-            const table = tables[0] || { columns: [] };
+            const selectEl = document.getElementById('designer-table-select');
+            const selectedTableName = selectEl ? selectEl.value : null;
+            const table = (tables && tables.length)
+                ? (tables.find(t => t.tableName === selectedTableName) || tables[0])
+                : { columns: [] };
             const tbody = document.getElementById('designer-columns-tbody');
 
             tbody.innerHTML = table.columns.map(c => {
@@ -661,7 +674,13 @@
         }
 
         function prefillDesigner(tableName) {
-            document.getElementById('designer-table-select').value = tableName;
+            const selectEl = document.getElementById('designer-table-select');
+            if (selectEl) {
+                selectEl.value = tableName;
+            }
+            if (currentDbOverview && currentDbOverview.tables) {
+                renderDesignerColumns(currentDbOverview.tables);
+            }
             switchTab('designer');
         }
 

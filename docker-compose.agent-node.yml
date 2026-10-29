@@ -1,0 +1,121 @@
+version: '3.8'
+
+# =============================================================================
+# Ayrotek Veri Marketi — Bağımsız Kurum İçi DMZ Düğümü (On-Premise Node Stack)
+# 
+# Bu Docker Compose dosyası, dış/bağımsız bir bilgisayarda (Banka / Kurum DMZ)
+# tüm gerçek hayat gereksinimlerini tek komutla ayağa kaldırır:
+#   1. postgres: Kurumun özel PostgreSQL veritabanı (Ham veriler burada izole kalır)
+#   2. zkp-anoncreds: Kurum içi Hyperledger AnonCreds ZKP motoru
+#   3. manager: Koordinatör ile el sıkışan, kayıt ve canlılık yöneten Sidecar
+#   4. agent: Kripto hesaplamalarını (Shamir, RSA-OAEP) ve DB sorgularını yürüten Ajan
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # 1. PostgreSQL: Kurumun İzole Yerel Veritabanı (Ham veri asla kurum dışına çıkmaz)
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: agent-node-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-institution_db}
+      POSTGRES_USER: ${DB_USER:-verimarket}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-verimarket_password}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - ./init-agent-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - agent_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-verimarket} -d ${DB_NAME:-institution_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # 2. Hyperledger AnonCreds: Kurum İçi Sıfır Bilgi İspatı (ZKP) Motoru
+  # ---------------------------------------------------------------------------
+  zkp-anoncreds:
+    build:
+      context: ../../infrastructure_and_demos/ZKP_Demo_Anoncreds
+      dockerfile: Dockerfile
+    image: verimarket-zkp-anoncreds:latest
+    container_name: agent-node-zkp
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${DB_USER:-verimarket}:${DB_PASSWORD:-verimarket_password}@postgres:5432/${DB_NAME:-institution_db}
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # 3. Sidecar Manager: Düğüm Kaydı, Canlılık (Heartbeat) ve Sağlık Takibi
+  # ---------------------------------------------------------------------------
+  manager:
+    build:
+      context: ./manager_service
+      dockerfile: Dockerfile
+    image: verimarket-manager:latest
+    container_name: agent-node-manager
+    restart: unless-stopped
+    environment:
+      - SERVER_PORT=8093
+      - NODE_ID=${NODE_ID:-Banka_Dis}
+      - NODE_NAME=${NODE_NAME:-Harici Banka DMZ Düğümü}
+      - AGENT_PUBLIC_URL=http://${MY_IP:-host.docker.internal}:8083
+      - MANAGER_PUBLIC_URL=http://${MY_IP:-host.docker.internal}:8093
+      - SUPPORTED_DATASETS=${SUPPORTED_DATASETS:-gelir_gider,bankalar,finans,kredi,consortium}
+      - ANONCREDS_SERVICE_URL=http://zkp-anoncreds:3000
+      - COORDINATOR_URL=${COORDINATOR_URL:-http://host.docker.internal:8081}
+      - HEARTBEAT_ENABLED=true
+      - HEARTBEAT_INTERVAL_MS=10000
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8093:8093"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      zkp-anoncreds:
+        condition: service_started
+
+  # ---------------------------------------------------------------------------
+  # 4. Entegrasyon Ajanı (Agent Core): Shamir MPC, RSA-OAEP ve Yerel DB Sorguları
+  # ---------------------------------------------------------------------------
+  agent:
+    build:
+      context: ./agent_core
+      dockerfile: Dockerfile
+    image: verimarket-agent:latest
+    container_name: agent-node-core
+    restart: unless-stopped
+    environment:
+      - SERVER_PORT=8083
+      - AGENT_ID=${NODE_ID:-Banka_Dis}
+      - AGENT_NAME=${NODE_NAME:-Harici Banka DMZ Düğümü}
+      - AGENT_PUBLIC_URL=http://${MY_IP:-host.docker.internal}:8083
+      - COORDINATOR_URL=${COORDINATOR_URL:-http://host.docker.internal:8081}
+      - ANONCREDS_SERVICE_URL=http://zkp-anoncreds:3000
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/${DB_NAME:-institution_db}
+      - SPRING_DATASOURCE_USERNAME=${DB_USER:-verimarket}
+      - SPRING_DATASOURCE_PASSWORD=${DB_PASSWORD:-verimarket_password}
+      - AGENT_DB_URL=jdbc:postgresql://postgres:5432/${DB_NAME:-institution_db}
+      - AGENT_DB_USERNAME=${DB_USER:-verimarket}
+      - AGENT_DB_PASSWORD=${DB_PASSWORD:-verimarket_password}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8083:8083"
+    depends_on:
+      - postgres
+      - zkp-anoncreds
+      - manager
+
+volumes:
+  agent_postgres_data:

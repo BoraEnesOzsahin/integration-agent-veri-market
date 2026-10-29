@@ -1,77 +1,66 @@
-# Ayrotek Veri Marketi — Kurum İçi Entegrasyon Ajanı & Sidecar Manager
+# Ayrotek Veri Marketi — Tam Kurum İçi (On-Premise DMZ) Düğüm Mimarisi
 
-Bu repository, **Ayrotek Veri Marketi Platformu** için kurum içi (On-Premise / DMZ) **Entegrasyon Ajanı (`integration_agent_node`)** ve **Sidecar Yöneticisi (`manager_service`)** bileşenlerini içerir.
+Bu dizin, **Ayrotek Veri Marketi Platformu** için harici veya bağımsız bir bilgisayarda (Banka / Kurum DMZ altyapısında) çalışan tam teşekküllü **Kurum İçi DMZ Düğümünü (On-Premise Node Stack)** içerir.
 
-Bu servisler kurumun kendi sunucularında veya bağımsız herhangi bir bilgisayarda çalışarak:
-1. Kurumun ham verisini (bakiye, gelir, kredi skoru vb.) **kurum sınırları dışına çıkarmadan** korur.
-2. Koordinatör'den (Platform) gelen analitik sorgular için **Hyperledger AnonCreds Sıfır Bilgi İspatı (ZKP)** üretir.
-3. Dağıtık MPC hesaplamaları için veriyi **Shamir Gizli Paylaşımı** ile böler ve doğrudan **Tüketici Açık Anahtarı (RSA-OAEP)** ile şifreler.
-4. Merkezi Platform Koordinatörüne periyodik canlılık (**Heartbeat**) sinyali göndererek konsorsiyum ağında aktif kalır.
+Gerçek hayat enterprise mimarisinde hiçbir kurum ham verilerini dışarıya vermez veya merkezi bir veritabanına bağlamaz. Kurumun kendi sınırları içerisinde 4 bağımsız katman çalışır:
+
+1. **Kurum Özel Veritabanı (`agent-node-postgres` - Port 5432):**
+   * Kurumun hassas finansal tablolarını barındırır (`gelir_gider` tablosu: `kar`, `gelir`, `gider`, `donem`, `yil`).
+   * Bu veritabanı kurumun DMZ sınırları içerisindedir ve dış ağlara kapalıdır.
+2. **Kurum İçi ZKP Motoru (`agent-node-zkp` - Port 3000):**
+   * Hyperledger AnonCreds (Rust CL-Signatures) sıfır bilgi ispat motoru.
+   * Ham verileri dışarı çıkarmadan yerel matematiksel ispatlar üretir.
+3. **Entegrasyon Ajanı (`agent-node-core` - Port 8083):**
+   * Yerel veritabanını sorgular, ZKP ispatını alır, veriyi Shamir polinomu ile paylara böler ve Tüketici Açık Anahtarı (RSA-OAEP) ile mühürler.
+4. **Sidecar Yöneticisi (`agent-node-manager` - Port 8093):**
+   * Merkezi Koordinatör servisi (`COORDINATOR_URL`) ile el sıkışır, kurumu konsorsiyum ağına kaydeder (`/api/v1/nodes/register`) ve her 10 saniyede bir canlılık (Heartbeat) bildirir.
 
 ---
 
-## 🚀 Hızlı Başlangıç (Herhangi Bir Bilgisayarda Çalıştırma)
+## 🚀 Dış Bilgisayarda Başlatma (Gerçek Hayat Senaryosu)
 
-Bu repoyu başka bir bilgisayara `git clone` ile çektikten sonra çalıştırmak çok basittir:
+Bu projeyi dış/başka bir bilgisayara kopyaladıktan sonra:
 
-### Windows (PowerShell):
+### Yöntem 1: Tek Tıkla Docker Compose (Önerilen)
+Dış bilgisayarda Docker Desktop açıkken, Coordinator sunucusunun IP adresini vererek başlatın:
+
 ```powershell
-# Coordinator'ın çalıştığı bilgisayarın yerel IP adresini belirterek çalıştırın:
-.\start-external-agent.ps1 -CoordinatorIp "192.168.1.100" -NodeId "Banka_B" -NodeName "Banka B Harici Şube"
+# Windows PowerShell (Kök dizinden veya bu dizinden):
+.\start-external-node.ps1 -CoordinatorIp "192.168.1.100" -NodeId "Banka_Harici_1" -NodeName "Harici Banka A.Ş."
 ```
-
-### Linux / macOS (Bash):
-```bash
-chmod +x start-external-agent.sh
-./start-external-agent.sh 192.168.1.100 8081 auto Banka_B "Banka B Harici Şube"
-```
-
----
-
-## ⚙️ Parametreler ve Çevre Değişkenleri
-
-| Parametre | Varsayılan | Açıklama |
-| :--- | :--- | :--- |
-| `CoordinatorIp` | `localhost` | Platform Koordinatörünün çalıştığı sunucunun IP adresi |
-| `CoordinatorPort` | `8081` | Koordinatör REST API portu |
-| `MyIp` | *(Otomatik)* | Bu makinenin yerel ağdaki IP adresi (Coordinator geri dönüş için kullanır) |
-| `NodeId` | `Banka_B` | Kurumun konsorsiyumdaki benzersiz kimliği |
-| `NodeName` | `Banka B...` | Kurumun insan tarafından okunabilir adı |
-| `AgentPort` | `8083` | Ajan REST servis portu |
-| `ManagerPort` | `8093` | Sidecar Yöneticisi servis portu |
-| `SupportedDatasets` | `bankalar,finans,kredi` | Kurumun desteklediği katalog veri setleri |
-
----
-
-## 🛠️ Manuel Başlatma (Komut Satırından)
-
-Eğer script yerine doğrudan JAR dosyalarını çalıştırmak isterseniz:
 
 ```bash
-# 1. Multi-Module Projeyi tek komutla derleyin (agent_core ve manager_service birlikte derlenir):
-mvn clean package -DskipTests
+# Linux / macOS:
+./start-external-agent.sh 192.168.1.100 8081 auto Banka_Harici_1 "Harici Banka A.Ş."
+```
 
-# 2. Sidecar Manager'ı Başlatın (Port 8093):
-java -jar manager_service/target/manager_service-1.0.0-SNAPSHOT.jar \
-  --server.port=8093 \
-  --node.id=Banka_B \
-  --node.name="Banka B Harici Şube" \
-  --node.agent-url=http://<BU_MAKINENIN_IPSI>:8083 \
-  --node.manager-url=http://<BU_MAKINENIN_IPSI>:8093 \
-  --node.coordinator-url=http://<COORDINATOR_IP>:8081
+Bu komut:
+* Bilgisayarınızın yerel IP'sini (`MyIp`) otomatik tespit eder.
+* `.env` dosyasını yapılandırır.
+* `docker-compose.agent-node.yml` dosyasını çalıştırarak 4 bileşeni de (`Postgres`, `ZKP AnonCreds`, `Manager`, `Agent`) izole konteynerler olarak ayağa kaldırır.
+* Koordinatör sunucusuna (`http://192.168.1.100:8081`) otomatik kayıt atar.
 
-# 3. Entegrasyon Ajanını Başlatın (Port 8083):
-java -jar agent_core/target/agent_core-1.0.0-SNAPSHOT.jar \
-  --server.port=8083 \
-  --agent.institution-id=Banka_B \
-  --agent.institution-name="Banka B Harici Şube" \
-  --agent.public-url=http://<BU_MAKINENIN_IPSI>:8083 \
-  --coordinator.url=http://<COORDINATOR_IP>:8081
+### Yöntem 2: Doğrudan `docker compose` ile Başlatma
+```bash
+# 1. .env.example dosyasını .env olarak kopyalayın ve Coordinator IP'sini düzenleyin:
+cp .env.example .env
+
+# 2. Tam DMZ stack'i başlatın:
+docker compose -f docker-compose.agent-node.yml up -d
+```
+
+### Konteynerleri Kapatma:
+```bash
+docker compose -f docker-compose.agent-node.yml down
 ```
 
 ---
 
-## 🔒 Güvenlik Mimarisi
-* **Ham Veri İzolasyonu:** Kurumun gerçek veri tabanındaki değerler Coordinator veya diğer bankalarla paylaşılmaz.
-* **Kör Yönlendirme (Blind Routing):** Shamir payları şifreli takas edilir.
-* **Sıfır Bilgi İspatı:** Verinin büyüklüğü açıklanmadan (ör: `income >= 30000`) sağlandığı matematiksel olarak teyit edilir.
+## 📊 Servis Portları ve Güvenlik Sınırı
+
+| Servis | Port | DMZ / Ağ Rolü | Dışarıya Açık mı? |
+| :--- | :---: | :--- | :---: |
+| **PostgreSQL** | `5432` | Kurum İçi Finans Veri Tabanı | ❌ Hayır (Yalnızca Kurum İçi) |
+| **AnonCreds ZKP**| `3000` | Sıfır Bilgi İspatı Motoru | ❌ Hayır (Yalnızca Kurum İçi) |
+| **Agent Core** | `8083` | Shamir MPC + Şifreleme | ✅ Evet (Coordinator erişebilmeli) |
+| **Manager** | `8093` | Kayıt ve Canlılık Takibi | ✅ Evet (Coordinator erişebilmeli) |
