@@ -65,7 +65,7 @@ public class AgentDatabaseService {
 
             if (rs.next()) {
                 long val = rs.getLong(1);
-                log.info("[AgentDatabase - {}] Yerel PostgreSQL sonucu: {} (DMZ içinde gizli tutuluyor)", institutionId, val);
+                log.info("[AgentDatabase - {}] Yerel PostgreSQL sonucu alındı (DMZ içinde gizli tutuluyor)", institutionId);
                 return BigInteger.valueOf(val);
             }
             return BigInteger.ZERO;

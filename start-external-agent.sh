@@ -71,25 +71,41 @@ fi
 
 if [ "$SELECTED_MODE" == "docker" ]; then
     echo -e "\033[36m>>> Docker Modu Seçildi. Tam DMZ Stack Ayağa Kaldırılıyor...\033[0m"
+    if [ -z "${AGENT_COORDINATOR_PUBLIC_KEY:-}" ]; then
+        AGENT_COORDINATOR_PUBLIC_KEY=$(curl -fsS -m 10 "${COORDINATOR_URL}/api/v1/vc/platform-public-key" | grep -o '"publicKeyHex":"[0-9a-f]*"' | cut -d'"' -f4)
+        if [ -z "$AGENT_COORDINATOR_PUBLIC_KEY" ]; then
+            echo -e "\033[31m[HATA] Koordinatör anahtarı alınamadı: ${COORDINATOR_URL}\033[0m"
+            exit 1
+        fi
+    fi
     cat <<EOF > "${SCRIPT_DIR}/.env"
 COORDINATOR_URL=${COORDINATOR_URL}
 MY_IP=${MY_IP}
 NODE_ID=${NODE_ID}
-NODE_NAME=${NODE_NAME}
+NODE_NAME="${NODE_NAME}"
 DB_NAME=${DB_NAME}
 DB_USER=${DB_USER}
 DB_PASSWORD=${DB_PASSWORD}
+DB_HOST=${DB_HOST}
 DB_PORT=${DB_PORT}
 SUPPORTED_DATASETS=${SUPPORTED_DATASETS}
+AGENT_COORDINATOR_PUBLIC_KEY=${AGENT_COORDINATOR_PUBLIC_KEY}
 EOF
+    chmod 600 "${SCRIPT_DIR}/.env"
 
-    docker compose -f "${SCRIPT_DIR}/docker-compose.agent-node.yml" up -d --build
+    docker compose -f "${SCRIPT_DIR}/docker-compose.agent-node.yml" up -d
     echo -e "\n\033[32m[BAŞARILI] Tüm kurum içi DMZ servisleri (DB, ZKP, Agent, Manager) ayağa kalktı!\033[0m"
     exit 0
 fi
 
 # Native Mod
 echo -e "\033[36m>>> Native Java Modu Başlatılıyor...\033[0m"
+
+# Eski çalışan ajan/manager süreçlerini temizle
+echo -e "\033[33m  [TEMİZLİK] Port ${AGENT_PORT} ve ${MANAGER_PORT} üzerindeki eski işlemler temizleniyor...\033[0m"
+fuser -k "${AGENT_PORT}/tcp" 2>/dev/null || true
+fuser -k "${MANAGER_PORT}/tcp" 2>/dev/null || true
+sleep 1
 AGENT_JAR="${SCRIPT_DIR}/agent_core/target/agent_core-1.0.0-SNAPSHOT.jar"
 if [ ! -f "$AGENT_JAR" ]; then
     AGENT_JAR="${SCRIPT_DIR}/../../agent-running.jar"

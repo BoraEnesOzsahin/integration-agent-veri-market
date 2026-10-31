@@ -5,8 +5,15 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import com.ayrotek.agent.crypto.Ed25519KeyStore;
+import com.ayrotek.agent.crypto.PedersenCommitment;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import org.springframework.beans.factory.annotation.Value;
+
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyPair;
+import java.security.Signature;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.*;
@@ -27,6 +34,47 @@ public class AgentChamberVcService {
     private final AgentDatabaseService databaseService;
     private final AgentCryptoService cryptoService;
     private final ObjectMapper objectMapper = new ObjectMapper();
+    /** İmza için kanonik (anahtarları sıralı) JSON üretir. */
+    private final ObjectMapper canonicalMapper = new ObjectMapper()
+            .configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
+
+    /** Kurumun kalıcı Ed25519 imza anahtarının dosyası. Boşsa ${user.home}/.verimarket/agent-<kurum>-ed25519.key. */
+    @Value("${agent.signing.key-file:}")
+    private String signingKeyFile = "";
+    @Value("${agent.institution-id:${AGENT_ID:Banka_A}}")
+    private String configuredInstitutionId = "Banka_A";
+    private volatile KeyPair signingKeyPair;
+
+    private synchronized KeyPair signingKey(String institutionId) {
+        if (signingKeyPair == null) {
+            String file = (signingKeyFile != null && !signingKeyFile.isBlank())
+                    ? signingKeyFile
+                    : System.getProperty("user.home") + "/.verimarket/agent-" + institutionId.toLowerCase() + "-ed25519.key";
+            signingKeyPair = Ed25519KeyStore.loadOrCreate(java.nio.file.Path.of(file));
+            log.info("[AgentChamberVc - {}] Kalıcı Ed25519 imza anahtarı yüklendi: {}", institutionId, file);
+        }
+        return signingKeyPair;
+    }
+
+    /**
+     * Gerçek Pedersen taahhüdü üretir. Açılış değerleri (v, r) yalnızca RSA-OAEP ile BU ajanın düğüm anahtarına
+     * şifrelenerek ("ciphertext") VC içine konur; böylece değeri yalnızca kurumun kendisi sonradan açabilir.
+     * Önceki sürümde "ciphertext" aslında düz Base64 idi ve ham değeri sızdırıyordu.
+     */
+    private Map<String, Object> pedersenClaim(String col, long value) {
+        BigInteger v = BigInteger.valueOf(value);
+        BigInteger r = PedersenCommitment.randomBlinding();
+        BigInteger c = PedersenCommitment.commit(v, r);
+        String sealedOpening = cryptoService.encryptWithRsaOaep(
+                cryptoService.getNodeTransportPublicKeyBase64(), col + "|" + v + "|" + r);
+        Map<String, Object> claim = new LinkedHashMap<>();
+        claim.put("dataType", "BigInteger");
+        claim.put("commitmentScheme", "Pedersen-MODP2048(g=4,h=H(verimarket-pedersen-h-v1))");
+        claim.put("commitment", PedersenCommitment.toHex(c));
+        claim.put("ciphertext", sealedOpening);
+        claim.put("ciphertextAlgorithm", "RSA/ECB/OAEPWithSHA-256AndMGF1Padding (yalnızca kurum düğüm anahtarı açabilir)");
+        return claim;
+    }
 
     public AgentChamberVcService(AgentDatabaseService databaseService, AgentCryptoService cryptoService) {
         this.databaseService = databaseService;
@@ -60,12 +108,7 @@ public class AgentChamberVcService {
             }
             transformedMetrics.put(col, val);
 
-            claims.put(col, Map.of(
-                    "dataType", "BigInteger",
-                    "commitment", "Pedersen(0x" + cryptoService.sha256Hex(institutionId + ":" + col + ":" + val).substring(0, 16) + ")",
-                    "ciphertext", "ENC_RSA_OAEP_" + Base64.getEncoder().encodeToString(("SEC_" + col.toUpperCase() + "_" + val).getBytes(StandardCharsets.UTF_8)),
-                    "zkpProof", "AnonCredsPredicateProof_" + col + "_gte_0"
-            ));
+            claims.put(col, pedersenClaim(col, val));
         }
 
         // Dinamik zaman damgası ve periyot
@@ -134,12 +177,7 @@ public class AgentChamberVcService {
             }
             transformedMetrics.put(col, metricVal);
 
-            claims.put(col, Map.of(
-                    "dataType", "BigInteger",
-                    "commitment", "Pedersen(0x" + cryptoService.sha256Hex(institutionId + ":" + col + ":" + metricVal).substring(0, 16) + ")",
-                    "ciphertext", "ENC_RSA_OAEP_" + Base64.getEncoder().encodeToString(("SEC_" + col.toUpperCase() + "_" + metricVal).getBytes(StandardCharsets.UTF_8)),
-                    "zkpProof", "AnonCredsPredicateProof_" + col + "_gte_0"
-            ));
+            claims.put(col, pedersenClaim(col, metricVal));
         }
 
         // 2. Dinamik Açık Metaveri Kolonları
@@ -179,11 +217,21 @@ public class AgentChamberVcService {
         subject.put("claims", claims);
         vc.put("credentialSubject", subject);
 
+        // Gerçek Ed25519 imzası: proof alanı hariç VC'nin kanonik JSON'u üzerinde, kurumun KALICI anahtarıyla.
         Map<String, Object> proof = new LinkedHashMap<>();
         proof.put("type", "Ed25519Signature2020");
         proof.put("created", Instant.now().toString());
         proof.put("verificationMethod", "did:ayrotek:node:" + institutionId.toLowerCase() + "#key-1");
-        proof.put("proofValue", cryptoService.sha256Hex(institutionId + "_signature_" + System.currentTimeMillis()));
+        try {
+            KeyPair kp = signingKey(institutionId);
+            Signature sig = Signature.getInstance("Ed25519");
+            sig.initSign(kp.getPrivate());
+            sig.update(canonicalMapper.writeValueAsBytes(vc));
+            proof.put("proofValue", Ed25519KeyStore.toHex(sig.sign()));
+            proof.put("issuerPublicKeyHex", Ed25519KeyStore.toHex(kp.getPublic().getEncoded()));
+        } catch (Exception e) {
+            throw new IllegalStateException("VC imzalanamadı: " + e.getMessage(), e);
+        }
         vc.put("proof", proof);
 
         String rawVcJson;
@@ -203,9 +251,9 @@ public class AgentChamberVcService {
         res.put("metricsTransformed", transformedMetrics);
         res.put("securityAudit", Map.of(
                 "rawValuesLeaked", 0,
-                "cryptographicShield", "Pedersen Commitment + AnonCreds ZKP CL-Signatures",
+                "cryptographicShield", "Pedersen Commitment (MODP-2048) + Ed25519Signature2020",
                 "executedInside", "ON_PREMISE_INSTITUTION_DMZ (Port " + serverPort + ")",
-                "guarantee", "Ham finansal değerler kurum DMZ bölgesinde kilitlendi. Koordinatöre sadece şifreli paylar ve Pedersen taahhütleri aktarıldı."
+                "guarantee", "Ham değerler VC içinde yer almaz: yalnızca Pedersen taahhütleri (g^v·h^r, rastgele körleme) ve kuruma özel RSA-OAEP ile mühürlü açılış bilgisi aktarılır."
         ));
         res.put("rawVcJson", rawVcJson);
         return res;

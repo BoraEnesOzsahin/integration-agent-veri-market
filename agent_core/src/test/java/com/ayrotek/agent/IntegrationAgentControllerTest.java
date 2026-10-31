@@ -15,6 +15,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @SpringBootTest
 @AutoConfigureMockMvc
+@org.springframework.test.context.TestPropertySource(properties = {"agent.mpc.allow-plain-share-receive=true", "agent.crypto.allow-ephemeral-key=true"})
 class IntegrationAgentControllerTest {
 
     @Autowired

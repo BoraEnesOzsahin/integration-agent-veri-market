@@ -71,10 +71,47 @@ public class IntegrationAgentController {
         return ResponseEntity.ok(agentService.initAndSplit(request));
     }
 
+    @PostMapping("/mpc/engine/prepare")
+    @Operation(summary = "MP-SPDZ İşine Hazırlan (Round 1)",
+               description = "Yerel değeri okur, ZKP ispatı üretir, rastgele maskeyi seçer ve kurumun kendi MP-SPDZ tarafı için iş sertifikasını döner. Ham değer ve maske ajandan çıkmaz.")
+    public ResponseEntity<AgentEnginePrepareResponse> enginePrepare(@RequestBody AgentEnginePrepareRequest request) {
+        return ResponseEntity.ok(agentService.enginePrepare(request));
+    }
+
+    @PostMapping("/mpc/engine/run")
+    @Operation(summary = "Kendi MP-SPDZ Tarafını Çalıştır (Round 2)",
+               description = "İmzalı çalışma bildirimini doğrular, MP-SPDZ tarafını çalıştırır ve maskeyi Tüketici Açık Anahtarıyla şifreleyerek döner.")
+    public ResponseEntity<AgentEngineRunResponse> engineRun(@RequestBody AgentEngineRunRequest request) {
+        return ResponseEntity.ok(agentService.engineRun(request));
+    }
+
+    /** Düz metin pay kabulü yalnızca test/demo için; üretimde kapalıdır (koordinatör payları göremez ilkesi). */
+    @org.springframework.beans.factory.annotation.Value("${agent.mpc.allow-plain-share-receive:false}")
+    private boolean allowPlainShareReceive;
+
+    @GetMapping("/mpc/peer-public-key")
+    @Operation(summary = "Düğümler Arası Pay Taşıma Açık Anahtarı",
+               description = "Eş ajanların bu düğüme göndereceği Shamir paylarını RSA-OAEP ile şifrelemek için kullandığı açık anahtar.")
+    public ResponseEntity<Map<String, String>> peerPublicKey() {
+        return ResponseEntity.ok(agentService.getPeerTransportPublicKey());
+    }
+
+    @PostMapping("/mpc/receive-encrypted-share")
+    @Operation(summary = "Eşten Gelen Şifreli Shamir Payını Kabul Et",
+               description = "Başka bir kurum ajanından doğrudan (koordinatörü atlayarak) gelen, bu düğümün açık anahtarıyla şifrelenmiş payı çözer ve oturum belleğine kaydeder.")
+    public ResponseEntity<ReceiveShareResponse> receiveEncryptedShare(@RequestBody EncryptedShareRequest request) {
+        return ResponseEntity.ok(agentService.receiveEncryptedShare(request));
+    }
+
     @PostMapping("/mpc/receive-share")
-    @Operation(summary = "Shamir Payını Kabul Et (Receive Shamir Share)",
-               description = "Diğer kurumlardan veya koordinatörden gelen Shamir payını teslim alır, doğrular ve ajanın MPC oturum belleğine güvenle kaydeder.")
+    @Operation(summary = "Shamir Payını Kabul Et (YALNIZCA DEMO/TEST)",
+               description = "Düz metin pay kabulü. Varsayılan olarak kapalıdır (agent.mpc.allow-plain-share-receive=true gerekir).")
     public ResponseEntity<ReceiveShareResponse> receiveShamirShare(@RequestBody ReceiveShareRequest request) {
+        if (!allowPlainShareReceive) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.FORBIDDEN,
+                    "Düz metin pay kabulü kapalı. Paylar /mpc/receive-encrypted-share ile şifreli gönderilmelidir.");
+        }
         return ResponseEntity.ok(agentService.receiveShare(request));
     }
 
@@ -89,6 +126,11 @@ public class IntegrationAgentController {
     @Operation(summary = "İş Bazında Alınan Shamir Paylarını Listele",
                description = "Belirli bir hesaplama işi (jobId) için kurum içi ajana ulaşmış olan tüm payları listeler.")
     public ResponseEntity<List<ReceiveShareRequest>> getReceivedShares(@PathVariable String jobId) {
+        if (!allowPlainShareReceive) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.FORBIDDEN,
+                    "Alınan paylar yalnızca demo/test modunda listelenebilir (agent.mpc.allow-plain-share-receive=true).");
+        }
         return ResponseEntity.ok(agentService.getReceivedShares(jobId));
     }
 
@@ -198,7 +240,9 @@ public class IntegrationAgentController {
             String createdAt,
             String status,
             boolean rawAttributesExposed,
-            String securityGuarantee
+            String securityGuarantee,
+            /** Koordinatörün bağımsız doğrulaması için KAMUSAL kanıt malzemesi (presentation, presentationRequest, schema, credentialDefinition). */
+            Map<String, Object> artifacts
     ) {}
 
     public record EncryptedShamirShare(
@@ -244,6 +288,15 @@ public class IntegrationAgentController {
             String encryptedData,
             String protocol,
             Map<String, String> metadata
+    ) {}
+
+    /** Eş ajandan ajana şifreli pay paketi. encryptedData = RSA-OAEP(jobId|senderPartyId|targetPartyId|shareValue). */
+    public record EncryptedShareRequest(
+            @JsonProperty("jobId") String jobId,
+            @JsonProperty("sourceInstitutionId") String sourceInstitutionId,
+            @JsonProperty("senderPartyId") int senderPartyId,
+            @JsonProperty("targetPartyId") int targetPartyId,
+            @JsonProperty("encryptedData") String encryptedData
     ) {}
 
     public record ReceiveShareResponse(
@@ -306,10 +359,15 @@ public class IntegrationAgentController {
             @JsonProperty("nonce") String nonce,
             @JsonProperty("overrideSecret") BigInteger overrideSecret,
             @JsonProperty("customAttributes") Map<String, Object> customAttributes,
-            @JsonProperty("schemaName") String schemaName
+            @JsonProperty("schemaName") String schemaName,
+            /** partyId -> eş ajanın taban URL'i. Paylar bu adreslere ajan tarafından doğrudan şifreli gönderilir. */
+            @JsonProperty("peerEndpoints") Map<Integer, String> peerEndpoints,
+            /** Koordinatörün imzaladığı kanonik iş bildirimi ve Ed25519 imzası (hex). */
+            @JsonProperty("jobManifest") String jobManifest,
+            @JsonProperty("jobManifestSignature") String jobManifestSignature
     ) {
         public AgentInitAndSplitRequest(String jobId, int partyId, int threshold, int totalParties, String targetMetric, List<PredicateRequirement> requestedPredicates, String nonce, BigInteger overrideSecret, Map<String, Object> customAttributes, String schemaName) {
-            this(jobId, partyId, threshold, totalParties, targetMetric, "gelir_gider", null, requestedPredicates, nonce, overrideSecret, customAttributes, schemaName);
+            this(jobId, partyId, threshold, totalParties, targetMetric, "gelir_gider", null, requestedPredicates, nonce, overrideSecret, customAttributes, schemaName, null, null, null);
         }
     }
 
@@ -318,6 +376,40 @@ public class IntegrationAgentController {
             int partyId,
             AgentZkpProofResponse zkpProof,
             List<SharePacket> outgoingShares,
+            String status
+    ) {}
+
+    public record AgentEnginePrepareRequest(
+            @JsonProperty("init") AgentInitAndSplitRequest init,
+            /** malicious-shamir (n >= 3) veya semi2k (n = 2). */
+            @JsonProperty("protocol") String protocol
+    ) {}
+
+    public record AgentEnginePrepareResponse(
+            String institutionId,
+            int partyId,
+            AgentZkpProofResponse zkpProof,
+            String certPem,
+            String status
+    ) {}
+
+    public record AgentEngineRunRequest(
+            @JsonProperty("jobId") String jobId,
+            @JsonProperty("basePort") int basePort,
+            /** partyId -> o işe özel MP-SPDZ sertifikası (PEM). */
+            @JsonProperty("certs") Map<Integer, String> certs,
+            @JsonProperty("consumerPublicKey") String consumerPublicKey,
+            /** Kanonik: jobId|protokol|eşik|basePort|tüketiciAnahtarSHA256|1=sertSHA256,2=sertSHA256 */
+            @JsonProperty("runManifest") String runManifest,
+            @JsonProperty("runManifestSignature") String runManifestSignature
+    ) {}
+
+    public record AgentEngineRunResponse(
+            String institutionId,
+            int partyId,
+            /** toplam + tüm maskeler. Tek başına toplam hakkında bilgi vermez; yalnızca Party 1 döner. */
+            String maskedResult,
+            EncryptedShamirShare consumerEncryptedMask,
             String status
     ) {}
 

@@ -64,7 +64,7 @@
                         Port: 8083
                     </span>
                 </div>
-                <a href="http://localhost:8081/portal.html" target="_blank" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition flex items-center gap-1.5 text-xs font-medium">
+                <a id="header-coord-link" href="#" target="_blank" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition flex items-center gap-1.5 text-xs font-medium">
                     <i data-lucide="external-link" class="w-3.5 h-3.5 text-slate-400"></i>
                     <span>Merkezi Platform (8081)</span>
                 </a>
@@ -505,7 +505,12 @@
 
     <script>
         const AGENT_URL = window.location.origin;
-        const COORD_URL = 'http://localhost:8081';
+        // Dinamik Coordinator URL: URL parametresi -> localStorage -> aynı host IP port 8081 -> 192.168.56.1:8081
+        const urlParams = new URLSearchParams(window.location.search);
+        let COORD_URL = urlParams.get('coordUrl') || localStorage.getItem('ayrotek_coord_url') || `${window.location.protocol}//${window.location.hostname}:8081`;
+        if (COORD_URL.includes(':8083') || COORD_URL.includes(':8093')) {
+            COORD_URL = COORD_URL.replace(/:80[89]3/, ':8081');
+        }
 
         let currentAgentStatus = null;
         let currentDbOverview = null;
@@ -517,6 +522,8 @@
         });
 
         async function refreshAll() {
+            const coordLink = document.getElementById('header-coord-link');
+            if (coordLink) coordLink.href = `${COORD_URL}/portal.html`;
             await loadAgentStatus();
             await loadDbOverview();
             await fetchChambersList();

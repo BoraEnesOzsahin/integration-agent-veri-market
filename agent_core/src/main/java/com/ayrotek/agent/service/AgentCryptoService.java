@@ -50,6 +50,43 @@ public class AgentCryptoService {
         return ephemeralSessionKeyPair;
     }
 
+    // -------------------------------------------------------------------------
+    // Düğümler arası (peer-to-peer) pay taşıma anahtarı.
+    // Koordinatör payları ASLA düz metin görmez: her pay hedef ajanın bu anahtarıyla şifrelenir.
+    // Anahtar yalnızca bellekte tutulur; ajan yeniden başlayınca yenilenir (oturum payları zaten bellek içi).
+    // -------------------------------------------------------------------------
+    private volatile KeyPair nodeTransportKeyPair;
+
+    private synchronized KeyPair getOrCreateNodeTransportKeyPair() {
+        if (nodeTransportKeyPair == null) {
+            try {
+                KeyPairGenerator kpg = KeyPairGenerator.getInstance("RSA");
+                kpg.initialize(3072, random);
+                nodeTransportKeyPair = kpg.generateKeyPair();
+                log.info("[AgentCryptoService] Düğümler arası pay taşıma RSA-3072 anahtar çifti üretildi.");
+            } catch (NoSuchAlgorithmException e) {
+                throw new IllegalStateException("RSA anahtar üreticisi başlatılamadı: " + e.getMessage(), e);
+            }
+        }
+        return nodeTransportKeyPair;
+    }
+
+    /** Bu düğümün pay taşıma açık anahtarı (Base64 X.509). Eşler payları bununla şifreler. */
+    public String getNodeTransportPublicKeyBase64() {
+        return Base64.getEncoder().encodeToString(getOrCreateNodeTransportKeyPair().getPublic().getEncoded());
+    }
+
+    /** Eşlerden gelen RSA-OAEP şifreli payı bu düğümün özel anahtarıyla çözer. */
+    public String decryptWithNodeTransportKey(String base64Ciphertext) {
+        try {
+            Cipher cipher = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding");
+            cipher.init(Cipher.DECRYPT_MODE, getOrCreateNodeTransportKeyPair().getPrivate());
+            return new String(cipher.doFinal(Base64.getDecoder().decode(base64Ciphertext)), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Şifreli pay çözülemedi (yanlış anahtar veya bozuk veri): " + e.getMessage(), e);
+        }
+    }
+
     /**
      * Eşik değeri (threshold) kadar Shamir polinom katsayıları üretir:
      * f(x) = secret + a_1*x + ... + a_{t-1}*x^{t-1} mod p
@@ -135,9 +172,20 @@ public class AgentCryptoService {
         }
     }
 
+    /**
+     * Tüketici anahtarı verilmemişse bellekte üretilen geçici anahtara şifrelemek, kimsenin açamayacağı bir
+     * sonuç üretir ve sessizce "başarılı" görünür. Bu yüzden varsayılan olarak hata verir
+     * (yalnızca agent.crypto.allow-ephemeral-key=true ile demo için açılır).
+     */
+    @Value("${agent.crypto.allow-ephemeral-key:false}")
+    private boolean allowEphemeralKey = false;
+
     public String getEffectivePublicKeyBase64() {
         if (defaultConsumerPublicKey != null && !defaultConsumerPublicKey.isBlank()) {
             return defaultConsumerPublicKey;
+        }
+        if (!allowEphemeralKey) {
+            throw new IllegalArgumentException("Tüketici açık anahtarı (consumerPublicKey) zorunludur; geçici anahtara şifreleme kapalı.");
         }
         return Base64.getEncoder().encodeToString(getOrCreateEphemeralKeyPair().getPublic().getEncoded());
     }
@@ -155,6 +203,9 @@ public class AgentCryptoService {
             return KeyFactory.getInstance("RSA").generatePublic(new X509EncodedKeySpec(keyBytes));
         }
 
+        if (!allowEphemeralKey) {
+            throw new IllegalArgumentException("Tüketici açık anahtarı (consumerPublicKey) zorunludur; geçici anahtara şifreleme kapalı.");
+        }
         return getOrCreateEphemeralKeyPair().getPublic();
     }
 }

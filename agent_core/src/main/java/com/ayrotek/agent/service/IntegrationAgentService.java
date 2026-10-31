@@ -65,6 +65,95 @@ public class IntegrationAgentService {
     // MPC Oturumu Bazında Alınan / Toplanan Paylar (JobId -> Alınan Paylar)
     private final Map<String, List<ReceiveShareRequest>> sessionReceivedShares = new ConcurrentHashMap<>();
 
+    // Oturum başına beklenen toplam katılımcı sayısı (eksik pay ile toplama yapılmasını engeller)
+    private final Map<String, Integer> expectedPartiesByJob = new ConcurrentHashMap<>();
+
+    // Eş-ler arası (agent -> agent) şifreli pay taşıma
+    private final java.net.http.HttpClient peerHttp = java.net.http.HttpClient.newBuilder()
+            .connectTimeout(java.time.Duration.ofSeconds(5)).build();
+    private final com.fasterxml.jackson.databind.ObjectMapper peerMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+    private final Map<String, String> peerKeyCache = new ConcurrentHashMap<>();
+
+    /** Virgülle ayrılmış izinli eş taban URL öneki listesi. Boşsa kısıtlama yok (YALNIZCA demo). Üretimde mutlaka doldurulmalı. */
+    @Value("${agent.mpc.peer-allowlist:}")
+    private String peerAllowlist = "";
+
+    /**
+     * Sabitlenmiş (pinned) platform/koordinatör Ed25519 açık anahtarı (X.509, hex). Doluysa her init-and-split
+     * isteği, koordinatörce imzalanmış geçerli bir iş bildirimi taşımak ZORUNDADIR ve paylar yalnızca bildirimde
+     * adı geçen eşlere gider (allowlist gerekmez). Anahtar: GET <koordinatör>/api/v1/vc/platform-public-key
+     */
+    @Value("${agent.coordinator.public-key:}")
+    private String coordinatorPublicKeyHex = "";
+
+    /** jobId -> o iş için koordinatörün onayladığı eş taban URL'leri. */
+    private final Map<String, java.util.Set<String>> approvedPeersByJob = new ConcurrentHashMap<>();
+
+    private void verifyJobManifest(AgentInitAndSplitRequest request, String jobId) {
+        if (coordinatorPublicKeyHex == null || coordinatorPublicKeyHex.isBlank()) {
+            return; // eski mod: allowlist (veya kısıtsız demo)
+        }
+        String manifest = request.jobManifest();
+        String sigHex = request.jobManifestSignature();
+        if (manifest == null || sigHex == null || manifest.isBlank() || sigHex.isBlank()) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.FORBIDDEN, "İmzalı iş bildirimi (jobManifest) zorunlu.");
+        }
+        verifyCoordinatorSignature(manifest, sigHex);
+        String[] f = manifest.split("\\|", -1);
+        if (f.length != 5 || !f[0].equals(jobId)
+                || Integer.parseInt(f[1]) != request.threshold() || Integer.parseInt(f[2]) != request.totalParties()) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.FORBIDDEN, "İş bildirimi istekle uyuşmuyor (jobId/eşik/n).");
+        }
+        if (Long.parseLong(f[3]) < java.time.Instant.now().getEpochSecond()) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.FORBIDDEN, "İş bildirimi süresi dolmuş.");
+        }
+        java.util.Set<String> approved = new java.util.HashSet<>();
+        Map<Integer, String> inManifest = new java.util.HashMap<>();
+        for (String kv : f[4].split(",")) {
+            if (kv.isBlank()) continue;
+            String[] p = kv.split("=", 2);
+            inManifest.put(Integer.parseInt(p[0]), p[1]);
+            approved.add(p[1]);
+        }
+        Map<Integer, String> asked = new java.util.HashMap<>();
+        if (request.peerEndpoints() != null) {
+            request.peerEndpoints().forEach((k, v) -> asked.put(k, v.replaceAll("/+$", "")));
+        }
+        if (!asked.equals(inManifest)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.FORBIDDEN, "peerEndpoints imzalı bildirimle uyuşmuyor.");
+        }
+        approvedPeersByJob.put(jobId, approved);
+    }
+
+    private void verifyCoordinatorSignature(String payload, String sigHex) {
+        try {
+            java.security.PublicKey pk = java.security.KeyFactory.getInstance("Ed25519").generatePublic(
+                    new java.security.spec.X509EncodedKeySpec(hexToBytes(coordinatorPublicKeyHex.trim())));
+            java.security.Signature sig = java.security.Signature.getInstance("Ed25519");
+            sig.initVerify(pk);
+            sig.update(payload.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            if (!sig.verify(hexToBytes(sigHex.trim()))) {
+                throw new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.FORBIDDEN, "İş bildirimi imzası geçersiz.");
+            }
+        } catch (org.springframework.web.server.ResponseStatusException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.FORBIDDEN, "İş bildirimi doğrulanamadı: " + e.getMessage());
+        }
+    }
+
+    private static byte[] hexToBytes(String h) {
+        byte[] out = new byte[h.length() / 2];
+        for (int i = 0; i < out.length; i++) out[i] = (byte) Integer.parseInt(h.substring(2 * i, 2 * i + 2), 16);
+        return out;
+    }
+
     public IntegrationAgentService(AgentCryptoService cryptoService,
                                    AgentDatabaseService databaseService,
                                    AgentZkpProverService zkpProverService,
@@ -199,8 +288,18 @@ public class IntegrationAgentService {
         }
 
         String jobId = request.jobId().trim();
-        sessionReceivedShares.computeIfAbsent(jobId, k -> new CopyOnWriteArrayList<>()).add(request);
-        int total = sessionReceivedShares.get(jobId).size();
+        List<ReceiveShareRequest> sessionList = sessionReceivedShares.computeIfAbsent(jobId, k -> new CopyOnWriteArrayList<>());
+        int total;
+        synchronized (sessionList) {
+            boolean duplicate = sessionList.stream().anyMatch(r -> r.senderPartyId() == request.senderPartyId());
+            if (duplicate) {
+                throw new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.CONFLICT,
+                        "Bu oturum için Party " + request.senderPartyId() + " payı zaten alındı (çift sayım engellendi).");
+            }
+            sessionList.add(request);
+            total = sessionList.size();
+        }
 
         return new ReceiveShareResponse(
                 jobId,
@@ -274,9 +373,63 @@ public class IntegrationAgentService {
         }
 
         String jobId = request.jobId().trim();
+        verifyJobManifest(request, jobId);
         int partyId = request.partyId() > 0 ? request.partyId() : 1;
         int totalParties = request.totalParties() > 0 ? request.totalParties() : 3;
         int threshold = request.threshold() > 0 ? request.threshold() : (totalParties / 2 + 1);
+
+        LocalSecret local = resolveSecretAndProve(request, jobId);
+        BigInteger secret = local.secret();
+        var zkpProof = local.proof();
+
+        log.info("[IntegrationAgent - {}] Oturum {} başlatıldı. Eşik: {}, Toplam Paydaş: {}",
+                getInstitutionId(), jobId, threshold, totalParties);
+
+        // 3. Shamir Polinom Katsayılarını Üret
+        BigInteger[] coeffs = cryptoService.generatePolynomialCoefficients(secret, threshold);
+
+        // 4. Tüm Katılımcılar İçin Payları Hesapla
+        expectedPartiesByJob.put(jobId, totalParties);
+        Map<Integer, String> peers = request.peerEndpoints() != null ? request.peerEndpoints() : Collections.emptyMap();
+        for (int x = 1; x <= totalParties; x++) {
+            BigInteger shareVal = cryptoService.evaluatePolynomial(coeffs, x, threshold);
+            if (x == partyId) {
+                // Kendi payını doğrudan kendi bellek alanına kaydet
+                receiveShare(new ReceiveShareRequest(
+                        jobId,
+                        getInstitutionId(),
+                        partyId,
+                        partyId,
+                        shareVal,
+                        false,
+                        null,
+                        "SHAMIR_SECRET_SHARING",
+                        Map.of("selfShare", "true")
+                ));
+            } else {
+                String peerUrl = peers.get(x);
+                if (peerUrl == null || peerUrl.isBlank()) {
+                    throw new org.springframework.web.server.ResponseStatusException(
+                            org.springframework.http.HttpStatus.BAD_REQUEST,
+                            "Party " + x + " için eş ajan adresi (peerEndpoints) verilmedi; pay koordinatör üzerinden düz metin taşınmaz.");
+                }
+                sendShareToPeer(jobId, partyId, x, peerUrl, shareVal);
+            }
+        }
+        // Koordinatöre HİÇBİR pay dönmez: paylar eşlere doğrudan ve şifreli gönderildi.
+        return new AgentInitAndSplitResponse(
+                getInstitutionId(),
+                partyId,
+                zkpProof,
+                new ArrayList<SharePacket>(),
+                "INITIALIZED_AND_SPLIT_SUCCESSFULLY_P2P"
+        );
+    }
+
+    private record LocalSecret(BigInteger secret, AgentZkpProofResponse proof) {}
+
+    /** Kurumun yerel gizli değerini belirler (PostgreSQL veya yapılandırma) ve o değer üzerinde ZKP ispatı üretir. */
+    private LocalSecret resolveSecretAndProve(AgentInitAndSplitRequest request, String jobId) {
         String targetMetric = (request.targetMetric() != null && !request.targetMetric().isBlank())
                 ? request.targetMetric().trim()
                 : "kar";
@@ -300,8 +453,8 @@ public class IntegrationAgentService {
                 if (dbVal != null) {
                     secret = dbVal;
                     queryAttrs.put(targetMetric, dbVal.toString());
-                    log.info("[IntegrationAgent - {}] PostgreSQL'den gerçek yerel gizli değer çekildi: {} TL (Tablo: {}, Kolon: {})",
-                            getInstitutionId(), secret, datasetName, targetMetric);
+                    log.info("[IntegrationAgent - {}] PostgreSQL'den yerel gizli değer çekildi (Tablo: {}, Kolon: {})",
+                            getInstitutionId(), datasetName, targetMetric);
                 } else {
                     Object val = queryAttrs.get(targetMetric);
                     secret = (val != null) ? new BigInteger(val.toString()) : new BigInteger(defaultSecret);
@@ -325,44 +478,290 @@ public class IntegrationAgentService {
                 request.schemaName(),
                 datasetName
         );
-        var zkpProof = generateZkpProof(zkpReq);
+        return new LocalSecret(secret, generateZkpProof(zkpReq));
+    }
 
-        log.info("[IntegrationAgent - {}] Oturum {} başlatıldı. Tablo: {}, Metrik: {}, Yerel Gizli Değer: {} (gizli tutuluyor), Eşik: {}, Toplam Paydaş: {}",
-                getInstitutionId(), jobId, datasetName, targetMetric, secret, threshold, totalParties);
+    // -------------------------------------------------------------------------
+    // Gerçek MP-SPDZ MPC: her kurum yalnızca KENDİ tarafını kendi makinesinde çalıştırır
+    // -------------------------------------------------------------------------
+    private static final BigInteger RING_MODULUS = BigInteger.ONE.shiftLeft(64);
 
-        // 3. Shamir Polinom Katsayılarını Üret
-        BigInteger[] coeffs = cryptoService.generatePolynomialCoefficients(secret, threshold);
+    /** Kurumun yanında çalışan MP-SPDZ köprüsü. Dışarıya açılmaz, yalnızca bu ajan çağırır. */
+    @Value("${agent.mpc.engine-url:http://localhost:50051}")
+    private String mpcEngineUrl = "http://localhost:50051";
 
-        // 4. Tüm Katılımcılar İçin Payları Hesapla
-        List<SharePacket> outgoingShares = new ArrayList<>();
-        for (int x = 1; x <= totalParties; x++) {
-            BigInteger shareVal = cryptoService.evaluatePolynomial(coeffs, x, threshold);
+    private record EngineSession(BigInteger secret, BigInteger mask, String protocol, int partyId, int totalParties,
+                                 int threshold, List<String> hosts, String certPem, long expiresAtEpochSec) {}
 
-            if (x == partyId) {
-                // Kendi payını doğrudan kendi bellek alanına kaydet
-                receiveShare(new ReceiveShareRequest(
-                        jobId,
-                        getInstitutionId(),
-                        partyId,
-                        partyId,
-                        shareVal,
-                        false,
-                        null,
-                        "SHAMIR_SECRET_SHARING",
-                        Map.of("selfShare", "true")
-                ));
-            } else {
-                outgoingShares.add(new SharePacket(partyId, x, shareVal));
+    private final Map<String, EngineSession> engineSessions = new ConcurrentHashMap<>();
+
+    public AgentEnginePrepareResponse enginePrepare(AgentEnginePrepareRequest request) {
+        if (request == null || request.init() == null || request.init().jobId() == null || request.init().jobId().isBlank()) {
+            throw new IllegalArgumentException("JobId boş olamaz!");
+        }
+        AgentInitAndSplitRequest init = request.init();
+        String jobId = init.jobId().trim();
+        verifyJobManifest(init, jobId);
+        String protocol = request.protocol();
+        if (!"malicious-shamir".equals(protocol) && !"semi2k".equals(protocol)) {
+            throw new IllegalArgumentException("Desteklenmeyen MPC protokolü: " + protocol);
+        }
+        int n = init.totalParties();
+        int partyId = init.partyId();
+        Map<Integer, String> peers = init.peerEndpoints() != null ? init.peerEndpoints() : Collections.emptyMap();
+        List<String> hosts = new ArrayList<>();
+        for (int x = 1; x <= n; x++) {
+            String url = peers.get(x);
+            if (url == null || url.isBlank()) {
+                throw new IllegalArgumentException("Party " + x + " için adres (peerEndpoints) verilmedi.");
             }
+            String base = url.replaceAll("/+$", "");
+            assertPeerAllowed(jobId, base);
+            String host = java.net.URI.create(base).getHost();
+            if (host == null) {
+                throw new IllegalArgumentException("Party " + x + " adresi çözümlenemedi: " + url);
+            }
+            hosts.add(host);
         }
 
-        return new AgentInitAndSplitResponse(
-                getInstitutionId(),
-                partyId,
-                zkpProof,
-                outgoingShares,
-                "INITIALIZED_AND_SPLIT_SUCCESSFULLY"
-        );
+        LocalSecret local = resolveSecretAndProve(init, jobId);
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("jobId", jobId);
+        body.put("partyId", partyId - 1); // MP-SPDZ tarafları 0'dan başlar
+        body.put("numParties", n);
+        body.put("protocol", protocol);
+        String certPem = callEngine("/api/v1/mpc/party-prepare", body, 90).path("certPem").asText();
+
+        long now = Instant.now().getEpochSecond();
+        engineSessions.values().removeIf(s -> s.expiresAtEpochSec() < now);
+        engineSessions.put(jobId, new EngineSession(local.secret(), newMask(protocol), protocol, partyId, n,
+                init.threshold(), hosts, certPem, now + 600));
+        return new AgentEnginePrepareResponse(getInstitutionId(), partyId, local.proof(), certPem, "PREPARED_FOR_MP_SPDZ");
+    }
+
+    public AgentEngineRunResponse engineRun(AgentEngineRunRequest request) {
+        if (request == null || request.jobId() == null || request.jobId().isBlank()) {
+            throw new IllegalArgumentException("JobId boş olamaz!");
+        }
+        String jobId = request.jobId().trim();
+        String consumerKey = request.consumerPublicKey();
+        if (consumerKey == null || consumerKey.isBlank()) {
+            throw new IllegalArgumentException("Tüketici açık anahtarı zorunludur.");
+        }
+        EngineSession session = engineSessions.remove(jobId);
+        if (session == null) {
+            throw new IllegalStateException("Bu iş için hazırlık yok veya iş zaten çalıştırıldı: " + jobId);
+        }
+        Map<Integer, String> certs = request.certs() != null ? request.certs() : Collections.emptyMap();
+        if (!session.certPem().equals(certs.get(session.partyId()))) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.FORBIDDEN, "Bu kurumun iş sertifikası değiştirilmiş.");
+        }
+        verifyRunManifest(request, session, jobId);
+
+        Map<String, String> engineCerts = new LinkedHashMap<>();
+        certs.forEach((k, v) -> engineCerts.put(String.valueOf(k - 1), v));
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("jobId", jobId);
+        body.put("partyId", session.partyId() - 1);
+        body.put("numParties", session.totalParties());
+        body.put("threshold", session.threshold());
+        body.put("protocol", session.protocol());
+        body.put("input", session.secret().toString());
+        body.put("mask", session.mask().toString());
+        body.put("hosts", session.hosts());
+        body.put("certs", engineCerts);
+        body.put("basePort", request.basePort());
+        var result = callEngine("/api/v1/mpc/party-run", body, 90);
+
+        String masked = result.path("maskedResult").isNull() ? null : result.path("maskedResult").asText(null);
+        String encrypted = cryptoService.encryptWithRsaOaep(consumerKey, session.partyId() + ":" + session.mask());
+        log.info("[IntegrationAgent - {}] MP-SPDZ işi {} tamamlandı (Protokol: {}, Taraf: {}/{}).",
+                getInstitutionId(), jobId, session.protocol(), session.partyId(), session.totalParties());
+        return new AgentEngineRunResponse(getInstitutionId(), session.partyId(), masked,
+                new EncryptedShamirShare(session.partyId(), encrypted, "RSA/ECB/OAEPWithSHA-256AndMGF1Padding"),
+                "MP_SPDZ_PARTY_COMPLETED");
+    }
+
+    private void verifyRunManifest(AgentEngineRunRequest request, EngineSession session, String jobId) {
+        if (coordinatorPublicKeyHex == null || coordinatorPublicKeyHex.isBlank()) {
+            return; // eski mod: sabitlenmiş koordinatör anahtarı yok
+        }
+        String manifest = request.runManifest();
+        String sigHex = request.runManifestSignature();
+        if (manifest == null || sigHex == null || manifest.isBlank() || sigHex.isBlank()) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.FORBIDDEN, "İmzalı çalışma bildirimi (runManifest) zorunlu.");
+        }
+        verifyCoordinatorSignature(manifest, sigHex);
+        StringBuilder certHashes = new StringBuilder();
+        new java.util.TreeMap<>(request.certs()).forEach((k, v) -> {
+            if (certHashes.length() > 0) certHashes.append(',');
+            certHashes.append(k).append('=').append(cryptoService.sha256Hex(v));
+        });
+        String expected = jobId + "|" + session.protocol() + "|" + session.threshold() + "|" + request.basePort() + "|"
+                + cryptoService.sha256Hex(request.consumerPublicKey()) + "|" + certHashes;
+        if (!expected.equals(manifest)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.FORBIDDEN, "Çalışma bildirimi istekle uyuşmuyor.");
+        }
+    }
+
+    /** Protokolün alanında düzgün dağılımlı maske: toplam + maske, toplam hakkında bilgi vermez. */
+    private static BigInteger newMask(String protocol) {
+        java.security.SecureRandom random = new java.security.SecureRandom();
+        if ("semi2k".equals(protocol)) {
+            return new BigInteger(64, random);
+        }
+        BigInteger mask;
+        do {
+            mask = new BigInteger(PRIME.bitLength(), random);
+        } while (mask.compareTo(PRIME) >= 0);
+        return mask;
+    }
+
+    private com.fasterxml.jackson.databind.JsonNode callEngine(String path, Map<String, Object> body, int timeoutSeconds) {
+        try {
+            var req = java.net.http.HttpRequest.newBuilder()
+                    .uri(java.net.URI.create(mpcEngineUrl.replaceAll("/+$", "") + path))
+                    .timeout(java.time.Duration.ofSeconds(timeoutSeconds))
+                    .header("Content-Type", "application/json")
+                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(peerMapper.writeValueAsString(body)))
+                    .build();
+            var resp = peerHttp.send(req, java.net.http.HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() != 200) {
+                throw new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.BAD_GATEWAY,
+                        "MP-SPDZ motoru hata döndü (HTTP " + resp.statusCode() + "): " + resp.body());
+            }
+            return peerMapper.readTree(resp.body());
+        } catch (org.springframework.web.server.ResponseStatusException e) {
+            throw e;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("MP-SPDZ çağrısı kesildi.", e);
+        } catch (java.io.IOException e) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_GATEWAY,
+                    "MP-SPDZ motoruna ulaşılamadı (" + mpcEngineUrl + "): " + e.getMessage());
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Ajanlar arası doğrudan şifreli pay taşıma
+    // -------------------------------------------------------------------------
+    public Map<String, String> getPeerTransportPublicKey() {
+        return Map.of(
+                "institutionId", getInstitutionId(),
+                "algorithm", "RSA/ECB/OAEPWithSHA-256AndMGF1Padding",
+                "publicKey", cryptoService.getNodeTransportPublicKeyBase64());
+    }
+
+    private void assertPeerAllowed(String jobId, String baseUrl) {
+        if (coordinatorPublicKeyHex != null && !coordinatorPublicKeyHex.isBlank()) {
+            java.util.Set<String> ok = approvedPeersByJob.get(jobId);
+            if (ok == null || !ok.contains(baseUrl)) {
+                throw new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.FORBIDDEN, "Eş bu iş için koordinatör bildiriminde yok: " + baseUrl);
+            }
+            return;
+        }
+        if (peerAllowlist == null || peerAllowlist.isBlank()) {
+            return;
+        }
+        for (String allowed : peerAllowlist.split(",")) {
+            String a = allowed.trim();
+            if (!a.isEmpty() && baseUrl.startsWith(a)) {
+                return;
+            }
+        }
+        throw new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.FORBIDDEN,
+                "Eş adresi izinli listede (agent.mpc.peer-allowlist) değil: " + baseUrl);
+    }
+
+    private void sendShareToPeer(String jobId, int senderPartyId, int targetPartyId, String endpoint, BigInteger share) {
+        String base = endpoint.replaceAll("/+$", "");
+        assertPeerAllowed(jobId, base);
+        Exception last = null;
+        for (int attempt = 0; attempt < 2; attempt++) {
+            try {
+                String peerKey = peerKeyCache.get(base);
+                if (peerKey == null) {
+                    var keyReq = java.net.http.HttpRequest.newBuilder()
+                            .uri(java.net.URI.create(base + "/api/v1/agent/mpc/peer-public-key"))
+                            .timeout(java.time.Duration.ofSeconds(5)).GET().build();
+                    var keyResp = peerHttp.send(keyReq, java.net.http.HttpResponse.BodyHandlers.ofString());
+                    if (keyResp.statusCode() != 200) {
+                        throw new IllegalStateException("peer-public-key HTTP " + keyResp.statusCode());
+                    }
+                    peerKey = peerMapper.readTree(keyResp.body()).path("publicKey").asText();
+                    if (peerKey.isBlank()) {
+                        throw new IllegalStateException("Eş açık anahtar döndürmedi");
+                    }
+                    peerKeyCache.put(base, peerKey);
+                }
+                String plaintext = jobId + "|" + senderPartyId + "|" + targetPartyId + "|" + share;
+                String enc = cryptoService.encryptWithRsaOaep(peerKey, plaintext);
+                var body = new EncryptedShareRequest(jobId, getInstitutionId(), senderPartyId, targetPartyId, enc);
+                var postReq = java.net.http.HttpRequest.newBuilder()
+                        .uri(java.net.URI.create(base + "/api/v1/agent/mpc/receive-encrypted-share"))
+                        .timeout(java.time.Duration.ofSeconds(10))
+                        .header("Content-Type", "application/json")
+                        .POST(java.net.http.HttpRequest.BodyPublishers.ofString(peerMapper.writeValueAsString(body)))
+                        .build();
+                var postResp = peerHttp.send(postReq, java.net.http.HttpResponse.BodyHandlers.ofString());
+                if (postResp.statusCode() == 200) {
+                    log.info("[IntegrationAgent - {}] Pay şifreli olarak doğrudan eşe iletildi (Party {} -> Party {}).",
+                            getInstitutionId(), senderPartyId, targetPartyId);
+                    return;
+                }
+                // Anahtar değişmiş olabilir (eş yeniden başladı): önbelleği temizle, bir kez daha dene
+                peerKeyCache.remove(base);
+                throw new IllegalStateException("receive-encrypted-share HTTP " + postResp.statusCode() + ": " + postResp.body());
+            } catch (org.springframework.web.server.ResponseStatusException e) {
+                throw e;
+            } catch (Exception e) {
+                last = e;
+                peerKeyCache.remove(base);
+            }
+        }
+        throw new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.BAD_GATEWAY,
+                "Pay eşe iletilemedi (Party " + targetPartyId + ", " + base + "): " + (last != null ? last.getMessage() : "bilinmeyen hata"));
+    }
+
+    public ReceiveShareResponse receiveEncryptedShare(EncryptedShareRequest request) {
+        if (request == null || request.jobId() == null || request.jobId().isBlank()
+                || request.encryptedData() == null || request.encryptedData().isBlank()) {
+            throw new IllegalArgumentException("jobId ve encryptedData zorunludur!");
+        }
+        String plain = cryptoService.decryptWithNodeTransportKey(request.encryptedData());
+        String[] p = plain.split("\\|");
+        if (p.length != 4) {
+            throw new IllegalArgumentException("Şifreli pay biçimi geçersiz.");
+        }
+        // Şifreli içerik ile zarf (envelope) üst verisi uyuşmalı: başka işe/başka taraftan yeniden oynatmayı engeller
+        if (!p[0].equals(request.jobId())
+                || Integer.parseInt(p[1]) != request.senderPartyId()
+                || Integer.parseInt(p[2]) != request.targetPartyId()) {
+            throw new IllegalArgumentException("Şifreli pay ile zarf bilgileri uyuşmuyor (olası yeniden oynatma).");
+        }
+        BigInteger val = new BigInteger(p[3]);
+        if (val.signum() < 0 || val.compareTo(PRIME) >= 0) {
+            throw new IllegalArgumentException("Pay değeri alan dışında.");
+        }
+        return receiveShare(new ReceiveShareRequest(
+                request.jobId(),
+                request.sourceInstitutionId(),
+                request.senderPartyId(),
+                request.targetPartyId(),
+                val,
+                true,
+                null,
+                "SHAMIR_SECRET_SHARING",
+                Map.of("transport", "RSA-OAEP-P2P")));
     }
 
     // -------------------------------------------------------------------------
@@ -384,6 +783,11 @@ public class IntegrationAgentService {
             throw new IllegalStateException("Oturum için (" + jobId + ") henüz hiç pay toplanmadı!");
         }
 
+        Integer expected = expectedPartiesByJob.get(jobId);
+        if (expected != null && shares.size() != expected) {
+            throw new IllegalStateException("Oturum (" + jobId + ") için " + shares.size() + "/" + expected
+                    + " pay toplandı; eksik payla toplama yapılmaz.");
+        }
         // Homomorfik toplama: S_i = sum(shareValue) mod p
         BigInteger localSum = BigInteger.ZERO;
         for (ReceiveShareRequest s : shares) {

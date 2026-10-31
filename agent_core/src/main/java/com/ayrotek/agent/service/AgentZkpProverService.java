@@ -31,6 +31,10 @@ public class AgentZkpProverService {
 
     private static final Logger log = LoggerFactory.getLogger(AgentZkpProverService.class);
 
+    /** true ise AnonCreds ulaşılamazken uydurma "doğrulanamaz" kanıt döner. YALNIZCA demo; varsayılan kapalı. */
+    @Value("${agent.zkp.allow-standalone-fallback:false}")
+    private boolean allowStandaloneFallback = false;
+
     @Value("${anoncreds.service.url:http://localhost:3000}")
     private String anonCredsServiceUrl = "http://localhost:3000";
 
@@ -143,6 +147,7 @@ public class AgentZkpProverService {
         String presentationId = "pres-" + UUID.randomUUID().toString().substring(0, 8);
         String proofJson = null;
         String securityGuarantee = null;
+        Map<String, Object> artifacts = null;
 
         // Gerçek Hyperledger AnonCreds Motoru (Port 3000 / Node.js & Rust) ile İspat Üretimi
         if (isAnonCredsEngineAvailable()) {
@@ -153,6 +158,9 @@ public class AgentZkpProverService {
                 reqBodyMap.put("schemaName", schemaName);
                 reqBodyMap.put("attributeValues", effectiveAttrs);
                 reqBodyMap.put("revealedAttributes", List.of("dataset_id", "institution_id"));
+                if (nonce != null && nonce.matches("\\d{1,24}")) {
+                    reqBodyMap.put("nonce", nonce); // doğrulayıcının nonce'u sunum isteğine bağlanır (replay koruması)
+                }
 
                 List<Map<String, Object>> anoncredsPreds = new ArrayList<>();
                 for (PredicateRequirement p : predicates) {
@@ -177,6 +185,10 @@ public class AgentZkpProverService {
                 HttpResponse<String> httpRes = httpClient.send(httpReq, HttpResponse.BodyHandlers.ofString());
                 if (httpRes.statusCode() == 200) {
                     JsonNode rootNode = objectMapper.readTree(httpRes.body());
+                    JsonNode artifactsNode = rootNode.path("artifacts");
+                    if (!artifactsNode.isMissingNode() && !artifactsNode.isNull()) {
+                        artifacts = objectMapper.convertValue(artifactsNode, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+                    }
                     String rawPresId = rootNode.path("steps").path("presentation").path("id").asText();
                     if (rawPresId != null && !rawPresId.isBlank()) {
                         presentationId = rawPresId;
@@ -209,8 +221,20 @@ public class AgentZkpProverService {
         }
 
         if (proofJson == null) {
-            proofJson = "{\"anoncreds_token\":\"zkp-" + UUID.randomUUID() + "\",\"verified\":true,\"mode\":\"STANDALONE_FALLBACK\"}";
-            securityGuarantee = "Ham kurum verileri gizli tutuldu; AnonCreds ZKP koşul ispatı üretildi (Standalone Mod).";
+            if (!allowStandaloneFallback) {
+                throw new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+                        "AnonCreds ZKP motoru kanıt üretemedi (" + anonCredsServiceUrl + "). Sahte/standalone kanıta izin verilmiyor "
+                                + "(agent.zkp.allow-standalone-fallback=false).");
+            }
+            proofJson = "{\"anoncreds_token\":\"zkp-" + UUID.randomUUID() + "\",\"verified\":false,\"mode\":\"STANDALONE_FALLBACK_UNVERIFIABLE\"}";
+            securityGuarantee = "UYARI: Standalone demo modu. Bu kanıt kriptografik olarak DOĞRULANAMAZ.";
+        }
+        // Yerel hesaplanan predicate sonucu başarısızsa kanıt üretilmiş gibi davranma
+        if (predicatesProved.containsValue(Boolean.FALSE)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY,
+                    "Kurum verisi istenen ZKP koşulunu sağlamıyor: " + predicatesProved);
         }
 
         long elapsed = Math.max(1, System.currentTimeMillis() - startTime);
@@ -228,7 +252,8 @@ public class AgentZkpProverService {
                 Instant.now().toString(),
                 "PROOF_GENERATED_ON_PREMISE",
                 false,
-                securityGuarantee
+                securityGuarantee,
+                artifacts
         );
     }
 }
