@@ -28,6 +28,10 @@ public class AgentCryptoService {
     // 64-bit Mersenne Asalı: 2^61 - 1 (Matematiksel MPC Asal Alan Sabiti)
     public static final BigInteger PRIME = BigInteger.valueOf(2).pow(61).subtract(BigInteger.ONE);
 
+    // Tarayıcı Web Crypto yalnızca özet ve MGF1 aynı olunca açar; Java'nın varsayılanı MGF1-SHA-1 olduğu için açıkça verilir.
+    private static final javax.crypto.spec.OAEPParameterSpec OAEP_SHA256 = new javax.crypto.spec.OAEPParameterSpec(
+            "SHA-256", "MGF1", java.security.spec.MGF1ParameterSpec.SHA256, javax.crypto.spec.PSource.PSpecified.DEFAULT);
+
     private final SecureRandom random = new SecureRandom();
 
     @Value("${agent.default-consumer-public-key:}")
@@ -80,7 +84,7 @@ public class AgentCryptoService {
     public String decryptWithNodeTransportKey(String base64Ciphertext) {
         try {
             Cipher cipher = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding");
-            cipher.init(Cipher.DECRYPT_MODE, getOrCreateNodeTransportKeyPair().getPrivate());
+            cipher.init(Cipher.DECRYPT_MODE, getOrCreateNodeTransportKeyPair().getPrivate(), OAEP_SHA256);
             return new String(cipher.doFinal(Base64.getDecoder().decode(base64Ciphertext)), StandardCharsets.UTF_8);
         } catch (Exception e) {
             throw new IllegalArgumentException("Şifreli pay çözülemedi (yanlış anahtar veya bozuk veri): " + e.getMessage(), e);
@@ -127,7 +131,7 @@ public class AgentCryptoService {
         try {
             PublicKey pubKey = resolvePublicKey(publicKeyStr);
             Cipher cipher = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding");
-            cipher.init(Cipher.ENCRYPT_MODE, pubKey);
+            cipher.init(Cipher.ENCRYPT_MODE, pubKey, OAEP_SHA256);
             return Base64.getEncoder().encodeToString(cipher.doFinal(plaintext.getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) {
             throw new RuntimeException("RSA şifreleme hatası: " + e.getMessage(), e);
