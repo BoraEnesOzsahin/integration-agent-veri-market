@@ -186,7 +186,7 @@ def run_masked_party(binary, protocol, data, pid, n, corrupt, value, mask, hosts
     hosts_file = os.path.join(job_dir, "hosts")
     with open(hosts_file, "w") as fh:
         fh.write("\n".join(hosts) + "\n")
-    cmd = [binary, "-N", str(n), "-p", str(pid), "-pn", str(base_port), "-IF", input_prefix, "--ip-file-name", hosts_file]
+    cmd = [binary, "-N", str(n), "-p", str(pid), "-pn", str(base_port), "-IF", input_prefix, "--ip-file-name", hosts_file, "-OF", "."]
     if not is_ring_protocol(protocol):
         cmd += ["-T", str(corrupt), "-P", str(DEFAULT_PRIME)]
     p = subprocess.run(cmd + [name], cwd=job_dir, capture_output=True, text=True, timeout=PARTY_TIMEOUT)

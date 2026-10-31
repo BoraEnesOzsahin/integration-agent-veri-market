@@ -96,6 +96,13 @@ public class IntegrationAgentController {
         return ResponseEntity.ok(agentService.getPeerTransportPublicKey());
     }
 
+    @GetMapping("/mpc/attestation-key")
+    @Operation(summary = "Kurumun Sonuç İmza Anahtarı",
+               description = "Tüketici bu anahtarı koordinatörden geçirmeden, kurumdan alıp güvenilir listesine ekler.")
+    public ResponseEntity<Map<String, String>> attestationKey() {
+        return ResponseEntity.ok(agentService.getAttestationKey());
+    }
+
     @PostMapping("/mpc/receive-encrypted-share")
     @Operation(summary = "Eşten Gelen Şifreli Shamir Payını Kabul Et",
                description = "Başka bir kurum ajanından doğrudan (koordinatörü atlayarak) gelen, bu düğümün açık anahtarıyla şifrelenmiş payı çözer ve oturum belleğine kaydeder.")
@@ -321,15 +328,19 @@ public class IntegrationAgentController {
             BigInteger overrideSecret,
             String targetMetric,
             Map<String, Object> customAttributes,
-            String schemaName
+            String schemaName,
+            String datasetName
     ) {
         public AgentPipelineRequest(String jobId, String consumerPublicKey, int partyId, int threshold, int totalParties, String nonce, List<PredicateRequirement> requestedPredicates, BigInteger overrideSecret) {
-            this(jobId, consumerPublicKey, partyId, threshold, totalParties, nonce, requestedPredicates, overrideSecret, "income", null, null);
+            this(jobId, consumerPublicKey, partyId, threshold, totalParties, nonce, requestedPredicates, overrideSecret, "income", null, null, null);
         }
         public AgentPipelineRequest(String jobId, String consumerPublicKey, int partyId, int threshold, int totalParties, String nonce, List<PredicateRequirement> requestedPredicates, BigInteger overrideSecret, String targetMetric, Map<String, Object> customAttributes) {
-            this(jobId, consumerPublicKey, partyId, threshold, totalParties, nonce, requestedPredicates, overrideSecret, targetMetric, customAttributes, null);
+            this(jobId, consumerPublicKey, partyId, threshold, totalParties, nonce, requestedPredicates, overrideSecret, targetMetric, customAttributes, null, null);
         }
     }
+
+    /** Kurumun imzaladığı sonuç bildirimi: koordinatör içeriği değiştirirse tüketici fark eder. */
+    public record AgentAttestation(String payload, String signature) {}
 
     public record AgentPipelineResponse(
             String institutionId,
@@ -338,7 +349,8 @@ public class IntegrationAgentController {
             EncryptedShamirShare consumerEncryptedShare,
             String status,
             String securityGuarantee,
-            String timestamp
+            String timestamp,
+            AgentAttestation attestation
     ) {}
 
     public record SharePacket(
@@ -407,10 +419,11 @@ public class IntegrationAgentController {
     public record AgentEngineRunResponse(
             String institutionId,
             int partyId,
-            /** toplam + tüm maskeler. Tek başına toplam hakkında bilgi vermez; yalnızca Party 1 döner. */
+            /** toplam + tüm maskeler. Tek başına toplam hakkında bilgi vermez; her taraf aynı değeri döner ve imzalar. */
             String maskedResult,
             EncryptedShamirShare consumerEncryptedMask,
-            String status
+            String status,
+            AgentAttestation attestation
     ) {}
 
     public record AgentAggregateRequest(

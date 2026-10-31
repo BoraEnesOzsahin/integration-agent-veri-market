@@ -56,6 +56,22 @@ public class AgentChamberVcService {
         return signingKeyPair;
     }
 
+    /** Kurumun kalıcı Ed25519 anahtarıyla imza (hex). Tüketici sonucu bu imzayla doğrular. */
+    public String signAttestation(String payload) {
+        try {
+            Signature sig = Signature.getInstance("Ed25519");
+            sig.initSign(signingKey(configuredInstitutionId).getPrivate());
+            sig.update(payload.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return Ed25519KeyStore.toHex(sig.sign());
+        } catch (java.security.GeneralSecurityException e) {
+            throw new IllegalStateException("Sonuç imzalanamadı: " + e.getMessage(), e);
+        }
+    }
+
+    public String attestationPublicKeyHex() {
+        return Ed25519KeyStore.toHex(signingKey(configuredInstitutionId).getPublic().getEncoded());
+    }
+
     /**
      * Gerçek Pedersen taahhüdü üretir. Açılış değerleri (v, r) yalnızca RSA-OAEP ile BU ajanın düğüm anahtarına
      * şifrelenerek ("ciphertext") VC içine konur; böylece değeri yalnızca kurumun kendisi sonradan açabilir.

@@ -218,6 +218,10 @@ public class IntegrationAgentService {
     // Shamir Payı Hesaplama ve Tüketici Açık Anahtarıyla Şifreleme
     // -------------------------------------------------------------------------
     public AgentComputeShareResponse computeAndEncryptShare(AgentComputeShareRequest request) {
+        return computeAndEncryptShare(request, "gelir_gider");
+    }
+
+    private AgentComputeShareResponse computeAndEncryptShare(AgentComputeShareRequest request, String datasetName) {
         String targetMetric = (request != null && request.targetMetric() != null && !request.targetMetric().isBlank())
                 ? request.targetMetric()
                 : "income";
@@ -227,7 +231,7 @@ public class IntegrationAgentService {
             secret = request.overrideSecret();
         } else {
             try {
-                BigInteger dbVal = queryLocalDatabaseMetric("gelir_gider", targetMetric);
+                BigInteger dbVal = queryLocalDatabaseMetric(datasetName, targetMetric);
                 if (dbVal != null) {
                     secret = dbVal;
                 } else {
@@ -326,6 +330,12 @@ public class IntegrationAgentService {
     // -------------------------------------------------------------------------
     public AgentPipelineResponse executePipeline(AgentPipelineRequest request) {
         String jobId = (request != null && request.jobId() != null) ? request.jobId() : "job-" + UUID.randomUUID().toString().substring(0, 8);
+        if (request != null) {
+            requireLocalInput(request.overrideSecret());
+        }
+        String datasetName = (request != null && request.datasetName() != null && !request.datasetName().isBlank())
+                ? request.datasetName().trim()
+                : "gelir_gider";
 
         var zkpReq = new AgentZkpProofRequest(
                 jobId,
@@ -333,7 +343,8 @@ public class IntegrationAgentService {
                 request != null ? request.requestedPredicates() : null,
                 null,
                 request != null ? request.customAttributes() : null,
-                request != null ? request.schemaName() : null
+                request != null ? request.schemaName() : null,
+                datasetName
         );
         var zkpProof = generateZkpProof(zkpReq);
 
@@ -351,7 +362,12 @@ public class IntegrationAgentService {
                 request != null ? request.targetMetric() : "income",
                 request != null ? request.customAttributes() : null
         );
-        var shareResp = computeAndEncryptShare(shareReq);
+        var shareResp = computeAndEncryptShare(shareReq, datasetName);
+        String metric = request != null && request.targetMetric() != null ? request.targetMetric().trim() : "income";
+        String consumerKey = request != null ? request.consumerPublicKey() : null;
+        AgentAttestation attestation = (consumerKey == null || consumerKey.isBlank()) ? null
+                : attest(jobId, partyId, totalParties, threshold, "LOCAL_SINGLE_NODE", datasetName, metric, consumerKey,
+                        shareResp.consumerEncryptedShare().encryptedData(), null);
 
         return new AgentPipelineResponse(
                 getInstitutionId(),
@@ -360,7 +376,8 @@ public class IntegrationAgentService {
                 shareResp.consumerEncryptedShare(),
                 "ON_PREMISE_PIPELINE_EXECUTED_SUCCESSFULLY",
                 "Ham veri (" + (request != null && request.targetMetric() != null ? request.targetMetric() : "income") + ") asla kurum dışına çıkmadı. Tüketici için şifrelenmiş pay ve dinamik sıfır bilgi ispatı güvenle hazırlandı.",
-                Instant.now().toString()
+                Instant.now().toString(),
+                attestation
         );
     }
 
@@ -491,7 +508,39 @@ public class IntegrationAgentService {
     private String mpcEngineUrl = "http://localhost:50051";
 
     private record EngineSession(BigInteger secret, BigInteger mask, String protocol, int partyId, int totalParties,
-                                 int threshold, List<String> hosts, String certPem, long expiresAtEpochSec) {}
+                                 int threshold, List<String> hosts, String certPem, long expiresAtEpochSec,
+                                 String datasetName, String targetMetric) {}
+
+    /** Koordinatör bir kurumun girdisini belirleyemez: girdi yalnızca kurumun kendi veritabanından gelir. */
+    private void requireLocalInput(BigInteger overrideSecret) {
+        if (coordinatorPublicKeyHex == null || coordinatorPublicKeyHex.isBlank()) {
+            return; // eski mod: sabitlenmiş koordinatör anahtarı yok
+        }
+        if (overrideSecret != null) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.FORBIDDEN, "Kurum girdisi dışarıdan verilemez.");
+        }
+        if (!databaseService.isDbConnected()) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE, "Kurum veritabanına bağlanılamadı; varsayılan değerle hesaplama yapılmaz.");
+        }
+    }
+
+    /** Sonuç bildirimi: v1|kurum|iş|taraf|n|eşik|protokol|tablo|sütun|tüketici anahtarı özeti|şifreli maske özeti|maskeli sonuç */
+    private AgentAttestation attest(String jobId, int partyId, int totalParties, int threshold, String protocol,
+                                    String datasetName, String targetMetric, String consumerKey, String encrypted, String masked) {
+        String payload = String.join("|", "v1", getInstitutionId(), jobId, String.valueOf(partyId), String.valueOf(totalParties),
+                String.valueOf(threshold), protocol, datasetName, targetMetric, cryptoService.sha256Hex(consumerKey),
+                cryptoService.sha256Hex(encrypted), masked != null ? masked : "");
+        return new AgentAttestation(payload, chamberVcService.signAttestation(payload));
+    }
+
+    public Map<String, String> getAttestationKey() {
+        return Map.of(
+                "institutionId", getInstitutionId(),
+                "algorithm", "Ed25519",
+                "publicKeyHex", chamberVcService.attestationPublicKeyHex());
+    }
 
     private final Map<String, EngineSession> engineSessions = new ConcurrentHashMap<>();
 
@@ -502,6 +551,7 @@ public class IntegrationAgentService {
         AgentInitAndSplitRequest init = request.init();
         String jobId = init.jobId().trim();
         verifyJobManifest(init, jobId);
+        requireLocalInput(init.overrideSecret());
         String protocol = request.protocol();
         if (!"malicious-shamir".equals(protocol) && !"semi2k".equals(protocol)) {
             throw new IllegalArgumentException("Desteklenmeyen MPC protokolü: " + protocol);
@@ -536,7 +586,9 @@ public class IntegrationAgentService {
         long now = Instant.now().getEpochSecond();
         engineSessions.values().removeIf(s -> s.expiresAtEpochSec() < now);
         engineSessions.put(jobId, new EngineSession(local.secret(), newMask(protocol), protocol, partyId, n,
-                init.threshold(), hosts, certPem, now + 600));
+                init.threshold(), hosts, certPem, now + 600,
+                init.datasetName() != null && !init.datasetName().isBlank() ? init.datasetName().trim() : "gelir_gider",
+                init.targetMetric() != null && !init.targetMetric().isBlank() ? init.targetMetric().trim() : "kar"));
         return new AgentEnginePrepareResponse(getInstitutionId(), partyId, local.proof(), certPem, "PREPARED_FOR_MP_SPDZ");
     }
 
@@ -581,7 +633,9 @@ public class IntegrationAgentService {
                 getInstitutionId(), jobId, session.protocol(), session.partyId(), session.totalParties());
         return new AgentEngineRunResponse(getInstitutionId(), session.partyId(), masked,
                 new EncryptedShamirShare(session.partyId(), encrypted, "RSA/ECB/OAEPWithSHA-256AndMGF1Padding"),
-                "MP_SPDZ_PARTY_COMPLETED");
+                "MP_SPDZ_PARTY_COMPLETED",
+                attest(jobId, session.partyId(), session.totalParties(), session.threshold(), session.protocol(),
+                        session.datasetName(), session.targetMetric(), consumerKey, encrypted, masked));
     }
 
     private void verifyRunManifest(AgentEngineRunRequest request, EngineSession session, String jobId) {
