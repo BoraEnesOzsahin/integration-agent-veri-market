@@ -1,0 +1,37 @@
+{
+  "name": "zkp-demo-anoncreds",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "ts-node server.ts",
+    "start": "node dist/server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.5.2",
+    "@types/pg": "^8.20.0",
+    "@types/swagger-jsdoc": "^6.0.4",
+    "@types/swagger-ui-express": "^4.1.8",
+    "dotenv": "^17.4.1",
+    "eslint": "^10.2.0",
+    "express": "^5.2.1",
+    "install": "^0.13.0",
+    "nodemon": "^3.1.14",
+    "npm": "^11.12.1",
+    "prettier": "^3.8.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.2"
+  },
+  "dependencies": {
+    "@hyperledger/anoncreds-nodejs": "^0.4.0",
+    "@hyperledger/anoncreds-shared": "^0.4.0",
+    "pg": "^8.20.0",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-dist": "^5.32.2",
+    "swagger-ui-express": "^5.0.1"
+  }
+}

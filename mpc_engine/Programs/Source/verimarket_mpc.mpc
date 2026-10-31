@@ -1,0 +1,24 @@
+# ==============================================================================
+# Ayrotek Veri Marketi - MP-SPDZ Güvenli Çok Taraflı Hesaplama Devresi (MPC Circuit)
+# ==============================================================================
+# Bu devre, n adet katılımcı kurumdan (Bankalar, Finans/Sağlık/Eğitim kurumları)
+# kör girdileri (secret-shared inputs) alır, MPC protokolüyle toplar ve
+# sadece nihai toplamı açığa çıkarır (reveal). Katılımcıların bireysel verileri
+# hiçbir aşamada üçüncü taraflara veya koordinatöre ifşa edilmez.
+
+from Compiler.types import sint
+from Compiler.library import print_ln
+
+# Varsayılan konsorsiyum katılımcı sayısı (Örn: Banka A, B, C)
+NUM_PARTIES = 3
+
+total_sum = sint(0)
+
+# Her taraftan gizli girdisini al ve MPC alanı üzerinde homomorfik topla
+for i in range(NUM_PARTIES):
+    party_input = sint.get_input_from(i)
+    total_sum = total_sum + party_input
+
+# Sadece nihai toplu sonucu güvenli şekilde açığa çıkar
+revealed_result = total_sum.reveal()
+print_ln("AYROTEK_VERIMARKET_MPC_RESULT:%s", revealed_result)

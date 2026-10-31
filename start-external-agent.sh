@@ -93,7 +93,7 @@ AGENT_COORDINATOR_PUBLIC_KEY=${AGENT_COORDINATOR_PUBLIC_KEY}
 EOF
     chmod 600 "${SCRIPT_DIR}/.env"
 
-    docker compose -f "${SCRIPT_DIR}/docker-compose.agent-node.yml" up -d
+    docker compose -f "${SCRIPT_DIR}/docker-compose.agent-node.yml" up -d --build
     echo -e "\n\033[32m[BAŞARILI] Tüm kurum içi DMZ servisleri (DB, ZKP, Agent, Manager) ayağa kalktı!\033[0m"
     exit 0
 fi

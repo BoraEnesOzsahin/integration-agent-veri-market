@@ -14,7 +14,7 @@
 #   postgres        : Makinede Postgres yoksa: docker compose --profile local-db up -d
 #
 # Açık olması gereken portlar: 8083, 8093 ve MP-SPDZ için 14000-14999 (TCP).
-# İmajlar önceden yüklenmiş olmalıdır (docker load).
+# İmajlar bu depodan derlenir (--build). İlk build birkaç dakika sürer ve internet gerektirir.
 # =============================================================================
 
 services:
@@ -52,6 +52,8 @@ services:
       retries: 10
 
   zkp-anoncreds:
+    build:
+      context: ./zkp_anoncreds
     image: verimarket-zkp-anoncreds:latest
     container_name: agent-node-zkp
     restart: unless-stopped
@@ -65,6 +67,8 @@ services:
         condition: service_healthy
 
   mp-spdz:
+    build:
+      context: ./mpc_engine
     image: verimarket-mp-spdz:latest
     container_name: agent-node-mp-spdz
     restart: unless-stopped
@@ -74,6 +78,9 @@ services:
       MP_SPDZ_PORT: 50051
 
   manager:
+    build:
+      context: .
+      dockerfile: manager_service/Dockerfile
     image: verimarket-manager:latest
     container_name: agent-node-manager
     restart: unless-stopped
@@ -94,6 +101,9 @@ services:
         condition: service_started
 
   agent:
+    build:
+      context: .
+      dockerfile: agent_core/Dockerfile
     image: verimarket-agent:latest
     container_name: agent-node-core
     restart: unless-stopped

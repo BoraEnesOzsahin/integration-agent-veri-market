@@ -1,0 +1,7 @@
+.git
+.env
+**/target
+**/node_modules
+zkp_anoncreds
+mpc_engine
+*.log
