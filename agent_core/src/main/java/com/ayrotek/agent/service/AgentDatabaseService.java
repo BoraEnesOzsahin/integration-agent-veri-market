@@ -100,6 +100,32 @@ public class AgentDatabaseService {
         }
     }
 
+    /** Tablo veya view'daki sayısal veri sütunları (sıralı). Kimlik sütunları ölçüm sayılmaz. */
+    public List<String> listMetricColumns(String tableName) throws SQLException {
+        if (!isDbConnected()) {
+            return List.of();
+        }
+        String table = tableName.trim().toLowerCase();
+        if (!table.matches("^[a-z0-9_]+$")) {
+            throw new IllegalArgumentException("Geçersiz tablo adı: " + table);
+        }
+        List<String> columns = new ArrayList<>();
+        try (Connection conn = DriverManager.getConnection(dbUrl, dbUsername, dbPassword);
+             ResultSet rs = conn.getMetaData().getColumns(null, "public", table, "%")) {
+            while (rs.next()) {
+                String name = rs.getString("COLUMN_NAME");
+                boolean numeric = switch (rs.getInt("DATA_TYPE")) {
+                    case Types.SMALLINT, Types.INTEGER, Types.BIGINT, Types.NUMERIC, Types.DECIMAL, Types.REAL, Types.DOUBLE, Types.FLOAT -> true;
+                    default -> false;
+                };
+                if (numeric && !name.equalsIgnoreCase("id") && !name.toLowerCase().endsWith("_id")) {
+                    columns.add(name);
+                }
+            }
+        }
+        return columns;
+    }
+
     /**
      * Kurumun yerel PostgreSQL veritabanındaki tabloları ve şemayı listeler.
      * Ham veriler dışarı sızmaz, sadece tablo adları, kolonlar ve veri tipleri arayüze sunulur.
@@ -116,7 +142,7 @@ public class AgentDatabaseService {
         if (isDbConnected()) {
             try (Connection conn = DriverManager.getConnection(dbUrl, dbUsername, dbPassword)) {
                 DatabaseMetaData meta = conn.getMetaData();
-                try (ResultSet rs = meta.getTables(null, "public", "%", new String[]{"TABLE"})) {
+                try (ResultSet rs = meta.getTables(null, "public", "%", new String[]{"TABLE", "VIEW"})) {
                     while (rs.next()) {
                         String tableName = rs.getString("TABLE_NAME");
                         if ("flyway_schema_history".equalsIgnoreCase(tableName)) continue;

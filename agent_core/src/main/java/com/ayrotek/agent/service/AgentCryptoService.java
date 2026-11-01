@@ -92,6 +92,35 @@ public class AgentCryptoService {
     }
 
     /**
+     * RSA'nın sınırını aşan veriyi yalnızca bu düğümün açabileceği biçimde mühürler:
+     * Base64(RSA-OAEP(AES anahtarı) || IV || AES-256-GCM(veri)).
+     */
+    public String sealForThisNode(String plaintext) {
+        try {
+            byte[] aesKey = new byte[32];
+            byte[] iv = new byte[12];
+            random.nextBytes(aesKey);
+            random.nextBytes(iv);
+
+            Cipher wrap = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding");
+            wrap.init(Cipher.ENCRYPT_MODE, getOrCreateNodeTransportKeyPair().getPublic(), OAEP_SHA256);
+            byte[] wrappedKey = wrap.doFinal(aesKey);
+
+            Cipher gcm = Cipher.getInstance("AES/GCM/NoPadding");
+            gcm.init(Cipher.ENCRYPT_MODE, new javax.crypto.spec.SecretKeySpec(aesKey, "AES"), new javax.crypto.spec.GCMParameterSpec(128, iv));
+            byte[] body = gcm.doFinal(plaintext.getBytes(StandardCharsets.UTF_8));
+
+            byte[] out = new byte[wrappedKey.length + iv.length + body.length];
+            System.arraycopy(wrappedKey, 0, out, 0, wrappedKey.length);
+            System.arraycopy(iv, 0, out, wrappedKey.length, iv.length);
+            System.arraycopy(body, 0, out, wrappedKey.length + iv.length, body.length);
+            return Base64.getEncoder().encodeToString(out);
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException("Mühürleme hatası: " + e.getMessage(), e);
+        }
+    }
+
+    /**
      * Eşik değeri (threshold) kadar Shamir polinom katsayıları üretir:
      * f(x) = secret + a_1*x + ... + a_{t-1}*x^{t-1} mod p
      */

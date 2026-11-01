@@ -81,14 +81,13 @@ public class AgentChamberVcService {
         BigInteger v = BigInteger.valueOf(value);
         BigInteger r = PedersenCommitment.randomBlinding();
         BigInteger c = PedersenCommitment.commit(v, r);
-        String sealedOpening = cryptoService.encryptWithRsaOaep(
-                cryptoService.getNodeTransportPublicKeyBase64(), col + "|" + v + "|" + r);
+        String sealedOpening = cryptoService.sealForThisNode(col + "|" + v + "|" + r);
         Map<String, Object> claim = new LinkedHashMap<>();
         claim.put("dataType", "BigInteger");
         claim.put("commitmentScheme", "Pedersen-MODP2048(g=4,h=H(verimarket-pedersen-h-v1))");
         claim.put("commitment", PedersenCommitment.toHex(c));
         claim.put("ciphertext", sealedOpening);
-        claim.put("ciphertextAlgorithm", "RSA/ECB/OAEPWithSHA-256AndMGF1Padding (yalnızca kurum düğüm anahtarı açabilir)");
+        claim.put("ciphertextAlgorithm", "AES-256-GCM + RSA-OAEP-256 (yalnızca kurum düğüm anahtarı açabilir)");
         return claim;
     }
 
@@ -107,24 +106,22 @@ public class AgentChamberVcService {
         String table = (tableName != null && !tableName.isBlank()) ? tableName.trim().toLowerCase() : "gelir_gider";
         String cat = (category != null && !category.isBlank()) ? category.trim().toLowerCase() : "gelir_gider";
 
-        // Tablodaki dinamik kolonları veritabanından al veya varsayılan analiz kolonlarını belirle
-        List<String> targetColumns = List.of("kar", "gelir", "gider");
+        // Şema tablonun gerçek sayısal sütunlarından gelir; okunamayan değer 0 sayılmaz
+        List<String> targetColumns;
         Map<String, Object> claims = new LinkedHashMap<>();
-        Map<String, Object> transformedMetrics = new LinkedHashMap<>();
-
-        for (String col : targetColumns) {
-            long val = 0L;
-            try {
-                BigInteger dbVal = databaseService.queryLocalDatabaseMetric(table, col, institutionId);
-                if (dbVal != null) {
-                    val = dbVal.longValue();
-                }
-            } catch (Exception e) {
-                log.warn("[AgentChamberVc - {}] {} tablosundaki {} kolonu okunamadı: {}", institutionId, table, col, e.getMessage());
+        try {
+            targetColumns = databaseService.listMetricColumns(table);
+            if (targetColumns.isEmpty()) {
+                throw new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.BAD_REQUEST, "'" + table + "' bulunamadı veya sayısal sütunu yok (" + institutionId + ").");
             }
-            transformedMetrics.put(col, val);
-
-            claims.put(col, pedersenClaim(col, val));
+            for (String col : targetColumns) {
+                BigInteger dbVal = databaseService.queryLocalDatabaseMetric(table, col, institutionId);
+                claims.put(col, pedersenClaim(col, dbVal.longValue()));
+            }
+        } catch (java.sql.SQLException e) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST, "'" + table + "' okunamadı (" + institutionId + "): " + e.getMessage());
         }
 
         // Dinamik zaman damgası ve periyot
@@ -133,10 +130,10 @@ public class AgentChamberVcService {
         claims.put("donem", now.getYear() + "-Q" + currentQuarter);
         claims.put("yil", now.getYear());
 
-        log.info("[AgentChamberVc - {}] DMZ içi yerel PostgreSQL'den okundu (Ham veri asla dışarı sızmaz!): Tablo={}, Metrikler={}",
-                institutionId, table, transformedMetrics);
+        log.info("[AgentChamberVc - {}] DMZ içi yerel PostgreSQL'den okundu: Tablo={}, Sütunlar={}",
+                institutionId, table, targetColumns);
 
-        return buildAndSignVc(chamberId, cat, table, institutionId, institutionName, serverPort, claims, transformedMetrics, targetColumns, List.of("donem", "yil"));
+        return buildAndSignVc(chamberId, cat, table, institutionId, institutionName, serverPort, claims, targetColumns, List.of("donem", "yil"));
     }
 
     /**
@@ -166,7 +163,6 @@ public class AgentChamberVcService {
                 : Collections.emptyMap();
 
         Map<String, Object> claims = new LinkedHashMap<>();
-        Map<String, Object> transformedMetrics = new LinkedHashMap<>();
 
         // 1. Pedersen Taahhüdü ile Gizlenen Kolonlar
         for (String col : commitmentCols) {
@@ -187,11 +183,11 @@ public class AgentChamberVcService {
                     if (val != null) {
                         metricVal = val.longValue();
                     }
-                } catch (Exception e) {
-                    log.warn("[AgentChamberVc - {}] Kolon {} (dbCol={}) sorgulanamadı: {}", institutionId, col, targetCol, e.getMessage());
+                } catch (java.sql.SQLException e) {
+                    throw new org.springframework.web.server.ResponseStatusException(
+                            org.springframework.http.HttpStatus.BAD_REQUEST, "'" + table + "." + targetCol + "' okunamadı (" + institutionId + "): " + e.getMessage());
                 }
             }
-            transformedMetrics.put(col, metricVal);
 
             claims.put(col, pedersenClaim(col, metricVal));
         }
@@ -211,12 +207,12 @@ public class AgentChamberVcService {
             }
         }
 
-        return buildAndSignVc(chamberId, category, table, institutionId, institutionName, serverPort, claims, transformedMetrics, commitmentCols, publicCols);
+        return buildAndSignVc(chamberId, category, table, institutionId, institutionName, serverPort, claims, commitmentCols, publicCols);
     }
 
     private Map<String, Object> buildAndSignVc(String chamberId, String category, String table,
                                               String institutionId, String institutionName, int serverPort,
-                                              Map<String, Object> claims, Map<String, Object> transformedMetrics,
+                                              Map<String, Object> claims,
                                               List<String> commitmentCols, List<String> publicCols) {
         Map<String, Object> vc = new LinkedHashMap<>();
         vc.put("@context", List.of("https://www.w3.org/2018/credentials/v1", "https://schema.ayrotek.com/v1"));
@@ -264,7 +260,6 @@ public class AgentChamberVcService {
         res.put("tableName", table);
         res.put("commitmentColumns", commitmentCols);
         res.put("publicColumns", publicCols);
-        res.put("metricsTransformed", transformedMetrics);
         res.put("securityAudit", Map.of(
                 "rawValuesLeaked", 0,
                 "cryptographicShield", "Pedersen Commitment (MODP-2048) + Ed25519Signature2020",
