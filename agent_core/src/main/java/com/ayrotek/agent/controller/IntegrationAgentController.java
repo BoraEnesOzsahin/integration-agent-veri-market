@@ -340,21 +340,17 @@ public class IntegrationAgentController {
             String outputMode,
             String comparator,
             String thresholdValue,
-            ConsumerAuthorization consumerAuthorization
+            /** Koordinatörün imzaladığı tek kurum sorgu bildirimi. */
+            String requestManifest,
+            String requestManifestSignature
     ) {
         public AgentPipelineRequest(String jobId, String consumerPublicKey, int partyId, int threshold, int totalParties, String nonce, List<PredicateRequirement> requestedPredicates, BigInteger overrideSecret) {
-            this(jobId, consumerPublicKey, partyId, threshold, totalParties, nonce, requestedPredicates, overrideSecret, "income", null, null, null, null, null, null, null, null, null);
+            this(jobId, consumerPublicKey, partyId, threshold, totalParties, nonce, requestedPredicates, overrideSecret, "income", null, null, null, null, null, null, null, null, null, null);
         }
         public AgentPipelineRequest(String jobId, String consumerPublicKey, int partyId, int threshold, int totalParties, String nonce, List<PredicateRequirement> requestedPredicates, BigInteger overrideSecret, String targetMetric, Map<String, Object> customAttributes) {
-            this(jobId, consumerPublicKey, partyId, threshold, totalParties, nonce, requestedPredicates, overrideSecret, targetMetric, customAttributes, null, null, null, null, null, null, null, null);
+            this(jobId, consumerPublicKey, partyId, threshold, totalParties, nonce, requestedPredicates, overrideSecret, targetMetric, customAttributes, null, null, null, null, null, null, null, null, null);
         }
     }
-
-    /** Tüketicinin kayıtlı anahtarıyla imzaladığı sorgu yetkisi. Koordinatör anahtarı veya sorguyu değiştiremez. */
-    public record ConsumerAuthorization(
-            @JsonProperty("payload") String payload,
-            @JsonProperty("signature") String signature
-    ) {}
 
     /** Kurumun imzaladığı sonuç bildirimi: koordinatör içeriği değiştirirse tüketici fark eder. */
     public record AgentAttestation(String payload, String signature) {}
@@ -401,11 +397,10 @@ public class IntegrationAgentController {
             /** VALUE: sonuç açılır. THRESHOLD: yalnızca evet/hayır açılır. */
             @JsonProperty("outputMode") String outputMode,
             @JsonProperty("comparator") String comparator,
-            @JsonProperty("thresholdValue") String thresholdValue,
-            @JsonProperty("consumerAuthorization") ConsumerAuthorization consumerAuthorization
+            @JsonProperty("thresholdValue") String thresholdValue
     ) {
         public AgentInitAndSplitRequest(String jobId, int partyId, int threshold, int totalParties, String targetMetric, List<PredicateRequirement> requestedPredicates, String nonce, BigInteger overrideSecret, Map<String, Object> customAttributes, String schemaName) {
-            this(jobId, partyId, threshold, totalParties, targetMetric, "gelir_gider", null, requestedPredicates, nonce, overrideSecret, customAttributes, schemaName, null, null, null, null, null, null, null, null, null);
+            this(jobId, partyId, threshold, totalParties, targetMetric, "gelir_gider", null, requestedPredicates, nonce, overrideSecret, customAttributes, schemaName, null, null, null, null, null, null, null, null);
         }
     }
 
@@ -428,9 +423,7 @@ public class IntegrationAgentController {
             int partyId,
             AgentZkpProofResponse zkpProof,
             String certPem,
-            String status,
-            /** İş sertifikasının kurum anahtarıyla imzası: eşler sahte tarafı bununla ayırır. */
-            String certSignature
+            String status
     ) {}
 
     public record AgentEngineRunRequest(
@@ -441,11 +434,7 @@ public class IntegrationAgentController {
             @JsonProperty("consumerPublicKey") String consumerPublicKey,
             /** Kanonik: jobId|protokol|eşik|basePort|tüketiciAnahtarSHA256|1=sertSHA256,2=sertSHA256 */
             @JsonProperty("runManifest") String runManifest,
-            @JsonProperty("runManifestSignature") String runManifestSignature,
-            /** partyId -> iş sertifikasının kurum imzası. */
-            @JsonProperty("certSignatures") Map<Integer, String> certSignatures,
-            /** partyId -> sertifikayı imzalayan kurum. */
-            @JsonProperty("certInstitutions") Map<Integer, String> certInstitutions
+            @JsonProperty("runManifestSignature") String runManifestSignature
     ) {}
 
     public record AgentEngineRunResponse(

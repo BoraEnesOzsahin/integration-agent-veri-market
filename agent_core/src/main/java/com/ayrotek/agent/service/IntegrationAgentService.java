@@ -86,123 +86,54 @@ public class IntegrationAgentService {
     @Value("${agent.coordinator.public-key:}")
     private String coordinatorPublicKeyHex = "";
 
-    /** Açıksa kurum yalnızca kayıtlı bir tüketicinin imzaladığı sorguyu çalıştırır; eski imzasız uçlar kapanır. */
-    @Value("${AGENT_REQUIRE_CONSUMER_AUTH:false}")
-    private boolean requireConsumerAuth = false;
+    /** Açıksa MP-SPDZ öncesinden kalan imzasız uçlar kapanır: ağdaki başka bir kurum ham değer isteyemez. */
+    @Value("${AGENT_DISABLE_LEGACY_ENDPOINTS:false}")
+    private boolean disableLegacyEndpoints = false;
 
-    /** Kurumun onayladığı tüketiciler: kimlik:anahtarHex,kimlik:anahtarHex */
-    @Value("${AGENT_TRUSTED_CONSUMERS:}")
-    private String trustedConsumers = "";
-
-    private static final long MAX_AUTHORIZATION_SECONDS = 900;
-
-    private final Map<String, Long> usedQueryIds = new ConcurrentHashMap<>();
-
-    /** Doğrulanmış sorgu yetkisi: tüketicinin şifreleme anahtarı özeti ve katılan kurumların anahtarları. */
-    private record AuthorizedQuery(String consumerId, String consumerKeyHash, Map<String, String> institutions) {}
+    private final Map<String, Long> usedPipelineJobs = new ConcurrentHashMap<>();
 
     public void requireLegacyEndpointsAllowed() {
-        if (requireConsumerAuth) {
-            throw forbidden("Bu uç, tüketici yetkisi zorunluyken kapalıdır.");
+        if (disableLegacyEndpoints) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.FORBIDDEN, "Bu uç kapalıdır.");
         }
     }
 
-    private static org.springframework.web.server.ResponseStatusException forbidden(String message) {
-        return new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.FORBIDDEN, message);
-    }
-
-    static boolean ed25519Valid(String publicKeyHex, String payload, String signatureHex) {
-        try {
-            java.security.PublicKey pk = java.security.KeyFactory.getInstance("Ed25519").generatePublic(
-                    new java.security.spec.X509EncodedKeySpec(hexToBytes(publicKeyHex.trim())));
-            java.security.Signature sig = java.security.Signature.getInstance("Ed25519");
-            sig.initVerify(pk);
-            sig.update(payload.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            return sig.verify(hexToBytes(signatureHex.trim()));
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
-    /** cq1|tüketici|sorgu|bitiş|anahtarÖzeti|tablo|sütun|payda|işlem|çıktı|karşılaştırma|eşik|kurum=anahtar,kurum=anahtar */
-    private AuthorizedQuery verifyConsumerAuthorization(ConsumerAuthorization auth, String datasetName, String targetMetric,
-                                                        QuerySpec spec, int totalParties) {
-        if (!requireConsumerAuth) {
-            return null;
-        }
-        if (auth == null || auth.payload() == null || auth.signature() == null) {
-            throw forbidden("Sorgu, kayıtlı bir tüketicinin imzasını taşımıyor.");
-        }
-        String[] f = auth.payload().split("\\|", -1);
-        if (f.length != 13 || !"cq1".equals(f[0])) {
-            throw forbidden("Tüketici yetkisinin biçimi tanınmadı.");
-        }
-        String signer = null;
-        for (String entry : (trustedConsumers == null ? "" : trustedConsumers).split(",")) {
-            String[] kv = entry.trim().split(":", 2);
-            if (kv.length == 2 && kv[0].equals(f[1])) {
-                signer = kv[1];
+    /** pipe1|iş|bitiş|anahtarÖzeti|tablo|sütun|payda|işlem|çıktı|karşılaştırma|eşik: yalnızca koordinatör tek kurum sorgusu başlatabilir. */
+    private void verifyPipelineManifest(AgentPipelineRequest request, String jobId, String consumerKey, String datasetName, String metric, QuerySpec spec) {
+        if (coordinatorPublicKeyHex == null || coordinatorPublicKeyHex.isBlank()) {
+            if (disableLegacyEndpoints) {
+                throw new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.FORBIDDEN, "Koordinatör anahtarı tanımlı değil.");
             }
+            return; // eski mod: sabitlenmiş koordinatör anahtarı yok
         }
-        if (signer == null) {
-            throw forbidden("Tüketici bu kurumda kayıtlı değil: " + f[1]);
+        String manifest = request != null ? request.requestManifest() : null;
+        String sigHex = request != null ? request.requestManifestSignature() : null;
+        if (manifest == null || sigHex == null || manifest.isBlank() || sigHex.isBlank()) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.FORBIDDEN, "İmzalı sorgu bildirimi zorunlu.");
         }
-        if (!ed25519Valid(signer, auth.payload(), auth.signature())) {
-            throw forbidden("Tüketici imzası geçersiz.");
-        }
-        long now = Instant.now().getEpochSecond();
+        verifyCoordinatorSignature(manifest, sigHex);
+        String[] f = manifest.split("\\|", -1);
+        long now = java.time.Instant.now().getEpochSecond();
         long expires;
         try {
-            expires = Long.parseLong(f[3]);
+            expires = f.length == 11 ? Long.parseLong(f[2]) : -1;
         } catch (NumberFormatException e) {
-            throw forbidden("Tüketici yetkisinin süresi okunamadı.");
+            expires = -1;
         }
-        if (expires < now || expires > now + MAX_AUTHORIZATION_SECONDS) {
-            throw forbidden("Tüketici yetkisinin süresi geçersiz.");
+        String expected = String.join("|", "pipe1", jobId, f.length == 11 ? f[2] : "", cryptoService.sha256Hex(consumerKey != null ? consumerKey : ""),
+                datasetName, metric, spec.denominator(), spec.operation(), spec.output(), spec.comparator(), spec.threshold());
+        if (expires < now || !expected.equals(manifest)) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.FORBIDDEN, "Sorgu bildirimi istekle uyuşmuyor veya süresi dolmuş.");
         }
-        if (!f[5].equals(datasetName) || !f[6].equals(targetMetric) || !f[7].equals(spec.denominator()) || !f[8].equals(spec.operation())
-                || !f[9].equals(spec.output()) || !f[10].equals(spec.comparator()) || !f[11].equals(spec.threshold())) {
-            throw forbidden("Sorgu, tüketicinin imzaladığı sorguyla uyuşmuyor.");
+        usedPipelineJobs.values().removeIf(exp -> exp < now);
+        if (usedPipelineJobs.putIfAbsent(jobId, expires) != null) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.FORBIDDEN, "Bu sorgu bildirimi daha önce kullanılmış.");
         }
-        Map<String, String> institutions = new LinkedHashMap<>();
-        for (String entry : f[12].split(",")) {
-            String[] kv = entry.split("=", 2);
-            if (kv.length == 2) {
-                institutions.put(kv[0], kv[1]);
-            }
-        }
-        if (institutions.size() != totalParties) {
-            throw forbidden("Kurum sayısı, tüketicinin imzaladığı listeyle uyuşmuyor.");
-        }
-        if (!chamberVcService.attestationPublicKeyHex().equals(institutions.get(getInstitutionId()))) {
-            throw forbidden("Bu kurum, tüketicinin imzaladığı listede bu anahtarla yok.");
-        }
-        usedQueryIds.values().removeIf(exp -> exp < now);
-        if (usedQueryIds.putIfAbsent(f[2], expires) != null) {
-            throw forbidden("Bu tüketici yetkisi daha önce kullanılmış.");
-        }
-        return new AuthorizedQuery(f[1], f[4], institutions);
-    }
-
-    /** Sahte taraf engeli: her taraf sertifikası, tüketicinin imzaladığı listedeki farklı bir kurumca imzalanmış olmalı. */
-    static void verifyPeerCertificates(String jobId, int totalParties, Map<Integer, String> certs, Map<Integer, String> signatures,
-                                       Map<Integer, String> certInstitutions, Map<String, String> institutionKeys,
-                                       java.util.function.UnaryOperator<String> sha256Hex) {
-        java.util.Set<String> seen = new java.util.HashSet<>();
-        for (int partyId = 1; partyId <= totalParties; partyId++) {
-            String cert = certs != null ? certs.get(partyId) : null;
-            String signature = signatures != null ? signatures.get(partyId) : null;
-            String institution = certInstitutions != null ? certInstitutions.get(partyId) : null;
-            String key = institution != null ? institutionKeys.get(institution) : null;
-            if (cert == null || signature == null || key == null || !seen.add(institution)
-                    || !ed25519Valid(key, certPayload(jobId, partyId, sha256Hex.apply(cert)), signature)) {
-                throw forbidden("Party " + partyId + " için kurum imzalı sertifika doğrulanamadı.");
-            }
-        }
-    }
-
-    static String certPayload(String jobId, int partyId, String certHash) {
-        return "cert1|" + jobId + "|" + partyId + "|" + certHash;
     }
 
     /** jobId -> o iş için koordinatörün onayladığı eş taban URL'leri. */
@@ -455,21 +386,13 @@ public class IntegrationAgentService {
         String datasetName = (request != null && request.datasetName() != null && !request.datasetName().isBlank())
                 ? request.datasetName().trim()
                 : "gelir_gider";
-        // Yetki, ZKP ve kurum verisinden önce denetlenir
         String metric = request != null && request.targetMetric() != null ? request.targetMetric().trim() : "income";
         String consumerKey = request != null ? request.consumerPublicKey() : null;
         QuerySpec spec = QuerySpec.of(request != null ? request.operation() : null, request != null ? request.denominatorMetric() : null,
                 request != null ? request.outputMode() : null, request != null ? request.comparator() : null,
                 request != null ? request.thresholdValue() : null);
-        AuthorizedQuery authorized = request != null
-                ? verifyConsumerAuthorization(request.consumerAuthorization(), datasetName, metric, spec, 1)
-                : null;
-        if (authorized != null && (consumerKey == null || !authorized.consumerKeyHash().equals(cryptoService.sha256Hex(consumerKey)))) {
-            throw forbidden("Tüketici anahtarı, tüketicinin imzaladığı anahtar değil.");
-        }
-        if (requireConsumerAuth && authorized == null) {
-            throw forbidden("Sorgu, kayıtlı bir tüketicinin imzasını taşımıyor.");
-        }
+        // İmza, ZKP ve kurum verisinden önce denetlenir
+        verifyPipelineManifest(request, jobId, consumerKey, datasetName, metric, spec);
 
         var zkpReq = new AgentZkpProofRequest(
                 jobId,
@@ -497,7 +420,7 @@ public class IntegrationAgentService {
                 request != null ? request.customAttributes() : null
         );
         EncryptedShamirShare consumerShare;
-        if (authorized != null || (consumerKey != null && !consumerKey.isBlank() && request.operation() != null)) {
+        if (consumerKey != null && !consumerKey.isBlank() && request.operation() != null) {
             // Tek kurumda MPC yoktur: sonuç kurumda hesaplanır, doğrudan tüketici anahtarına şifrelenir
             String encrypted = cryptoService.encryptWithRsaOaep(consumerKey, partyId + ":" + spec.localResult(
                     readMetric(datasetName, metric), spec.isRatio() ? readMetric(datasetName, spec.denominator()) : BigInteger.ONE));
@@ -653,8 +576,7 @@ public class IntegrationAgentService {
 
     private record EngineSession(BigInteger secret, BigInteger mask, String protocol, int partyId, int totalParties,
                                  int threshold, List<String> hosts, String certPem, long expiresAtEpochSec,
-                                 String datasetName, String targetMetric, BigInteger denominator, QuerySpec spec,
-                                 AuthorizedQuery authorized) {}
+                                 String datasetName, String targetMetric, BigInteger denominator, QuerySpec spec) {}
 
     /** Devrede kullanılan sabit noktalı ölçek ve "payda sıfır" işareti; mp_spdz_service.py ile aynı olmalı. */
     private static final BigInteger FIXED_SCALE = BigInteger.ONE.shiftLeft(16);
@@ -814,11 +736,8 @@ public class IntegrationAgentService {
         }
 
         QuerySpec spec = QuerySpec.of(init.operation(), init.denominatorMetric(), init.outputMode(), init.comparator(), init.thresholdValue());
-        String datasetName = init.datasetName() != null && !init.datasetName().isBlank() ? init.datasetName().trim() : "gelir_gider";
-        String metricName = init.targetMetric() != null && !init.targetMetric().isBlank() ? init.targetMetric().trim() : "kar";
-        // Yetki, kurum verisine dokunmadan önce denetlenir
-        AuthorizedQuery authorized = verifyConsumerAuthorization(init.consumerAuthorization(), datasetName, metricName, spec, n);
         LocalSecret local = resolveSecretAndProve(init, jobId);
+        String datasetName = init.datasetName() != null && !init.datasetName().isBlank() ? init.datasetName().trim() : "gelir_gider";
         BigInteger denominator = spec.isRatio() ? readMetric(datasetName, spec.denominator()) : BigInteger.ZERO;
 
         Map<String, Object> body = new LinkedHashMap<>();
@@ -832,9 +751,10 @@ public class IntegrationAgentService {
         long now = Instant.now().getEpochSecond();
         engineSessions.values().removeIf(s -> s.expiresAtEpochSec() < now);
         engineSessions.put(jobId, new EngineSession(local.secret(), newMask(protocol), protocol, partyId, n,
-                init.threshold(), hosts, certPem, now + 600, datasetName, metricName, denominator, spec, authorized));
-        String certSignature = chamberVcService.signAttestation(certPayload(jobId, partyId, cryptoService.sha256Hex(certPem)));
-        return new AgentEnginePrepareResponse(getInstitutionId(), partyId, local.proof(), certPem, "PREPARED_FOR_MP_SPDZ", certSignature);
+                init.threshold(), hosts, certPem, now + 600, datasetName,
+                init.targetMetric() != null && !init.targetMetric().isBlank() ? init.targetMetric().trim() : "kar",
+                denominator, spec));
+        return new AgentEnginePrepareResponse(getInstitutionId(), partyId, local.proof(), certPem, "PREPARED_FOR_MP_SPDZ");
     }
 
     public AgentEngineRunResponse engineRun(AgentEngineRunRequest request) {
@@ -856,13 +776,6 @@ public class IntegrationAgentService {
                     org.springframework.http.HttpStatus.FORBIDDEN, "Bu kurumun iş sertifikası değiştirilmiş.");
         }
         verifyRunManifest(request, session, jobId);
-        if (session.authorized() != null) {
-            if (!session.authorized().consumerKeyHash().equals(cryptoService.sha256Hex(consumerKey))) {
-                throw forbidden("Tüketici anahtarı, tüketicinin imzaladığı anahtar değil.");
-            }
-            verifyPeerCertificates(jobId, session.totalParties(), certs, request.certSignatures(), request.certInstitutions(),
-                    session.authorized().institutions(), cryptoService::sha256Hex);
-        }
 
         Map<String, String> engineCerts = new LinkedHashMap<>();
         certs.forEach((k, v) -> engineCerts.put(String.valueOf(k - 1), v));

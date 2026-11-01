@@ -78,10 +78,6 @@ if [ "$SELECTED_MODE" == "docker" ]; then
             exit 1
         fi
     fi
-    # Kayıtlı tüketiciler yeniden çalıştırmada kaybolmasın
-    if [ -z "${AGENT_TRUSTED_CONSUMERS:-}" ] && [ -f "${SCRIPT_DIR}/.env" ]; then
-        AGENT_TRUSTED_CONSUMERS=$(grep '^AGENT_TRUSTED_CONSUMERS=' "${SCRIPT_DIR}/.env" | cut -d= -f2-)
-    fi
     cat <<EOF > "${SCRIPT_DIR}/.env"
 COORDINATOR_URL=${COORDINATOR_URL}
 MY_IP=${MY_IP}
@@ -94,7 +90,6 @@ DB_HOST=${DB_HOST}
 DB_PORT=${DB_PORT}
 SUPPORTED_DATASETS=${SUPPORTED_DATASETS}
 AGENT_COORDINATOR_PUBLIC_KEY=${AGENT_COORDINATOR_PUBLIC_KEY}
-AGENT_TRUSTED_CONSUMERS=${AGENT_TRUSTED_CONSUMERS:-}
 EOF
     chmod 600 "${SCRIPT_DIR}/.env"
 
