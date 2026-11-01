@@ -13,6 +13,8 @@ node:
   supported-datasets: ${SUPPORTED_DATASETS:bankalar,finans,kredi,consortium}
   anoncreds-url: ${ANONCREDS_SERVICE_URL:http://localhost:3000}
   coordinator-url: ${COORDINATOR_URL:http://localhost:8081}
+  # Ajanın imza anahtarıyla aynı dosya: kurumun tek kimliği
+  signing-key-file: ${NODE_SIGNING_KEY_FILE:}
   heartbeat:
     enabled: ${HEARTBEAT_ENABLED:true}
     interval-ms: ${HEARTBEAT_INTERVAL_MS:10000}

@@ -54,6 +54,15 @@ docker compose -f docker-compose.agent-node.yml up -d
 docker compose -f docker-compose.agent-node.yml down
 ```
 
+### Kurum Kimliği ve Yönetici Onayı
+Kayıt ve canlılık istekleri kurumun Ed25519 anahtarıyla imzalanır. İlk imzalı kayıtta bu anahtar koordinatörde sabitlenir ve kurum yönetici onayı bekler.
+
+```bash
+docker logs agent-node-manager | grep "Kurum anahtarı"
+```
+
+Bu değeri platform yöneticisine güvenli bir kanaldan iletin. Yönetici, Yönetim sayfasındaki anahtarla karşılaştırıp onaylar. Anahtar veya ajan adresi değişirse yeniden onay gerekir. Anahtarı kaybederseniz yönetici kimliği sıfırlamalıdır.
+
 ---
 
 ## 📊 Servis Portları ve Güvenlik Sınırı

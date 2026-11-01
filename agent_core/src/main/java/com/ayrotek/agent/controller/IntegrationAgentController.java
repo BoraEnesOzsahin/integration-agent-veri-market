@@ -174,6 +174,8 @@ public class IntegrationAgentController {
     @Operation(summary = "Kullanıcı Tanımlı Şema ile Kurum İçi Canlı VC Türet",
                description = "Kullanıcının seçtiği tablodan ve kolonlardan Pedersen Taahhüdü ve AnonCreds ZKP ile mühürlü W3C VC üretir.")
     public ResponseEntity<Map<String, Object>> mintCustomVc(@RequestBody Map<String, Object> request) {
+        // overrideValues ile keyfi değerler kurum anahtarıyla imzalanabilir: ağa açık olamaz
+        agentService.requireLegacyEndpointsAllowed();
         return ResponseEntity.ok(agentService.mintCustomChamberVc(request));
     }
 

@@ -69,6 +69,11 @@ public class NodeManagerService {
             .connectTimeout(Duration.ofSeconds(3))
             .build();
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final NodeIdentity identity;
+
+    public NodeManagerService(NodeIdentity identity) {
+        this.identity = identity;
+    }
 
     @EventListener(ApplicationReadyEvent.class)
     public void onStartup() {
@@ -78,6 +83,7 @@ public class NodeManagerService {
         log.info("[NodeManager] Yönetici Kendi URL: {}", managerUrl);
         log.info("[NodeManager] Desteklenen Veri Setleri: {}", supportedDatasets);
         log.info("[NodeManager] Yönetilen AnonCreds URL: {}", anoncredsUrl);
+        log.info("[NodeManager] Kurum anahtarı (yönetici onayında karşılaştırın): {}", identity.publicKeyHex());
         registerWithCoordinator();
     }
 
@@ -89,6 +95,10 @@ public class NodeManagerService {
             regBody.put("agentUrl", agentUrl);
             regBody.put("managerUrl", managerUrl);
             regBody.put("supportedDatasets", supportedDatasets);
+            long timestamp = System.currentTimeMillis();
+            regBody.put("publicKeyHex", identity.publicKeyHex());
+            regBody.put("timestamp", String.valueOf(timestamp));
+            regBody.put("signature", identity.sign(String.join("|", "node-register", "v1", nodeId, nodeName, agentUrl, managerUrl, supportedDatasets, String.valueOf(timestamp))));
             String jsonPayload = objectMapper.writeValueAsString(regBody);
 
             HttpRequest req = HttpRequest.newBuilder()
@@ -136,7 +146,9 @@ public class NodeManagerService {
         }
 
         try {
-            Map<String, String> hbBody = Map.of("nodeId", nodeId);
+            long timestamp = System.currentTimeMillis();
+            Map<String, String> hbBody = Map.of("nodeId", nodeId, "timestamp", String.valueOf(timestamp),
+                    "signature", identity.sign(String.join("|", "node-heartbeat", "v1", nodeId, String.valueOf(timestamp))));
             String jsonPayload = objectMapper.writeValueAsString(hbBody);
 
             HttpRequest req = HttpRequest.newBuilder()
@@ -155,8 +167,14 @@ public class NodeManagerService {
                 log.info("[NodeManager] Heartbeat başarılı -> {}", nodeId);
             } else if (resp.statusCode() == 403) {
                 this.isApproved = false;
-                this.lastStatusMessage = "PENDING_APPROVAL";
-                log.info("[NodeManager] Düğüm henüz onaylanmamış (PENDING_APPROVAL)");
+                String status = objectMapper.readTree(resp.body()).path("status").asText("");
+                if (status.equals("PENDING_APPROVAL") || status.equals("REJECTED")) {
+                    this.lastStatusMessage = status;
+                    log.info("[NodeManager] Düğüm onaylı değil ({})", status);
+                } else {
+                    this.lastStatusMessage = "İmza reddedildi";
+                    log.warn("[NodeManager] Coordinator isteği reddetti: {}", resp.body());
+                }
             } else if (resp.statusCode() == 404 || resp.statusCode() == 400) {
                 log.warn("[NodeManager] Düğüm Coordinator'da bulunamadı, yeniden kayıt deneniyor...");
                 registerWithCoordinator();

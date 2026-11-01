@@ -96,6 +96,9 @@ services:
       - COORDINATOR_URL=${COORDINATOR_URL:?COORDINATOR_URL gerekli}
       - HEARTBEAT_ENABLED=true
       - HEARTBEAT_INTERVAL_MS=10000
+      - NODE_SIGNING_KEY_FILE=/data/agent-signing.key
+    volumes:
+      - agent_keys:/data
     depends_on:
       zkp-anoncreds:
         condition: service_started
