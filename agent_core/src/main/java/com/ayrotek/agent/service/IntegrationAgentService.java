@@ -362,18 +362,29 @@ public class IntegrationAgentService {
                 request != null ? request.targetMetric() : "income",
                 request != null ? request.customAttributes() : null
         );
-        var shareResp = computeAndEncryptShare(shareReq, datasetName);
         String metric = request != null && request.targetMetric() != null ? request.targetMetric().trim() : "income";
         String consumerKey = request != null ? request.consumerPublicKey() : null;
+        QuerySpec spec = QuerySpec.of(request != null ? request.operation() : null, request != null ? request.denominatorMetric() : null,
+                request != null ? request.outputMode() : null, request != null ? request.comparator() : null,
+                request != null ? request.thresholdValue() : null);
+        EncryptedShamirShare consumerShare;
+        if (consumerKey != null && !consumerKey.isBlank() && request.operation() != null) {
+            // Tek kurumda MPC yoktur: sonuç kurumda hesaplanır, doğrudan tüketici anahtarına şifrelenir
+            String encrypted = cryptoService.encryptWithRsaOaep(consumerKey, partyId + ":" + spec.localResult(
+                    readMetric(datasetName, metric), spec.isRatio() ? readMetric(datasetName, spec.denominator()) : BigInteger.ONE));
+            consumerShare = new EncryptedShamirShare(partyId, encrypted, "RSA/ECB/OAEPWithSHA-256AndMGF1Padding");
+        } else {
+            consumerShare = computeAndEncryptShare(shareReq, datasetName).consumerEncryptedShare();
+        }
         AgentAttestation attestation = (consumerKey == null || consumerKey.isBlank()) ? null
-                : attest(jobId, partyId, totalParties, threshold, "LOCAL_SINGLE_NODE", datasetName, metric, consumerKey,
-                        shareResp.consumerEncryptedShare().encryptedData(), null);
+                : attest(jobId, partyId, totalParties, threshold, "LOCAL_SINGLE_NODE", datasetName, metric, spec, consumerKey,
+                        consumerShare.encryptedData(), null);
 
         return new AgentPipelineResponse(
                 getInstitutionId(),
                 jobId,
                 zkpProof,
-                shareResp.consumerEncryptedShare(),
+                consumerShare,
                 "ON_PREMISE_PIPELINE_EXECUTED_SUCCESSFULLY",
                 "Ham veri (" + (request != null && request.targetMetric() != null ? request.targetMetric() : "income") + ") asla kurum dışına çıkmadı. Tüketici için şifrelenmiş pay ve dinamik sıfır bilgi ispatı güvenle hazırlandı.",
                 Instant.now().toString(),
@@ -469,7 +480,11 @@ public class IntegrationAgentService {
                 BigInteger dbVal = queryLocalDatabaseMetric(datasetName, targetMetric);
                 if (dbVal != null) {
                     secret = dbVal;
-                    queryAttrs.put(targetMetric, dbVal.toString());
+                    // ZKP yalnızca koşulu olan sütunu taşır: AnonCreds negatif değer kabul etmez, zararlı toplam kanıtı düşürmemeli
+                    if (request.requestedPredicates() != null
+                            && request.requestedPredicates().stream().anyMatch(p -> p != null && targetMetric.equals(p.name()))) {
+                        queryAttrs.put(targetMetric, dbVal.toString());
+                    }
                     log.info("[IntegrationAgent - {}] PostgreSQL'den yerel gizli değer çekildi (Tablo: {}, Kolon: {})",
                             getInstitutionId(), datasetName, targetMetric);
                 } else {
@@ -509,7 +524,100 @@ public class IntegrationAgentService {
 
     private record EngineSession(BigInteger secret, BigInteger mask, String protocol, int partyId, int totalParties,
                                  int threshold, List<String> hosts, String certPem, long expiresAtEpochSec,
-                                 String datasetName, String targetMetric) {}
+                                 String datasetName, String targetMetric, BigInteger denominator, QuerySpec spec) {}
+
+    /** Devrede kullanılan sabit noktalı ölçek ve "payda sıfır" işareti; mp_spdz_service.py ile aynı olmalı. */
+    private static final BigInteger FIXED_SCALE = BigInteger.ONE.shiftLeft(16);
+    private static final BigInteger RATIO_UNDEFINED = BigInteger.ONE.shiftLeft(52);
+
+    /** İşlem ve çıktı biçimi. Kurum bunu imzalar: koordinatör sorguyu değiştirirse tüketici fark eder. */
+    private record QuerySpec(String operation, String denominator, String output, String comparator, String threshold) {
+
+        static QuerySpec of(String operation, String denominator, String output, String comparator, String threshold) {
+            String op = operation == null || operation.isBlank() ? "SUM" : operation.trim().toUpperCase();
+            String out = output == null || output.isBlank() ? "VALUE" : output.trim().toUpperCase();
+            if (!List.of("SUM", "PRODUCT", "RATIO").contains(op) || !List.of("VALUE", "THRESHOLD").contains(out)) {
+                throw badQuery("Desteklenmeyen işlem veya çıktı: " + op + "/" + out);
+            }
+            String den = "";
+            if ("RATIO".equals(op)) {
+                den = denominator == null ? "" : denominator.trim();
+                if (!den.matches("^[a-zA-Z0-9_]+$")) {
+                    throw badQuery("Oran için payda sütunu gerekli.");
+                }
+            }
+            String cmp = "";
+            String limit = "";
+            if ("THRESHOLD".equals(out)) {
+                cmp = comparator == null ? "" : comparator.trim();
+                limit = threshold == null ? "" : threshold.trim();
+                if (!List.of(">", ">=", "<", "<=").contains(cmp)) {
+                    throw badQuery("Eşik karşılaştırması geçersiz: " + cmp);
+                }
+                if (!limit.matches("RATIO".equals(op) ? "^-?\\d{1,12}(\\.\\d{1,4})?$" : "^-?\\d{1,18}$")) {
+                    throw badQuery("Eşik değeri geçersiz: " + limit);
+                }
+            }
+            return new QuerySpec(op, den, out, cmp, limit);
+        }
+
+        private static org.springframework.web.server.ResponseStatusException badQuery(String message) {
+            return new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST, message);
+        }
+
+        boolean isRatio() {
+            return "RATIO".equals(operation);
+        }
+
+        boolean isThreshold() {
+            return "THRESHOLD".equals(output);
+        }
+
+        /** Devreye giden eşik: orandaki ondalık eşik sabit noktalı ölçeğe çevrilir. */
+        String engineThreshold() {
+            java.math.BigDecimal value = new java.math.BigDecimal(threshold);
+            return isRatio()
+                    ? value.multiply(new java.math.BigDecimal(FIXED_SCALE)).setScale(0, java.math.RoundingMode.HALF_EVEN).toPlainString()
+                    : value.toPlainString();
+        }
+
+        /** Tek kurum: devrenin vereceği sonucun aynısı. */
+        BigInteger localResult(BigInteger value, BigInteger denominatorValue) {
+            boolean undefined = isRatio() && denominatorValue.signum() == 0;
+            BigInteger result = isRatio() && !undefined
+                    ? value.multiply(FIXED_SCALE).divide(denominatorValue)
+                    : (undefined ? RATIO_UNDEFINED : value);
+            if (!isThreshold()) {
+                return result;
+            }
+            if (undefined) {
+                return BigInteger.TWO;
+            }
+            int c = result.compareTo(new BigInteger(engineThreshold()));
+            boolean ok = switch (comparator) {
+                case ">" -> c > 0;
+                case ">=" -> c >= 0;
+                case "<" -> c < 0;
+                default -> c <= 0;
+            };
+            return ok ? BigInteger.ONE : BigInteger.ZERO;
+        }
+    }
+
+    private BigInteger readMetric(String datasetName, String column) {
+        try {
+            BigInteger value = queryLocalDatabaseMetric(datasetName, column);
+            if (value == null) {
+                throw new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE, "Kurum veritabanına bağlanılamadı.");
+            }
+            return value;
+        } catch (SQLException e) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST,
+                    "Veritabanı Şema Hatası: '" + column + "' sütunu veya '" + datasetName + "' tablosu " + getInstitutionId() + " kurumunda yok. [" + e.getMessage() + "]");
+        }
+    }
 
     /** Koordinatör bir kurumun girdisini belirleyemez: girdi yalnızca kurumun kendi veritabanından gelir. */
     private void requireLocalInput(BigInteger overrideSecret) {
@@ -526,11 +634,12 @@ public class IntegrationAgentService {
         }
     }
 
-    /** Sonuç bildirimi: v1|kurum|iş|taraf|n|eşik|protokol|tablo|sütun|tüketici anahtarı özeti|şifreli maske özeti|maskeli sonuç */
+    /** Sonuç bildirimi: v2|kurum|iş|taraf|n|eşik|protokol|tablo|sütun|payda|işlem|çıktı|karşılaştırma|eşik değeri|anahtar özeti|maske özeti|maskeli sonuç */
     private AgentAttestation attest(String jobId, int partyId, int totalParties, int threshold, String protocol,
-                                    String datasetName, String targetMetric, String consumerKey, String encrypted, String masked) {
-        String payload = String.join("|", "v1", getInstitutionId(), jobId, String.valueOf(partyId), String.valueOf(totalParties),
-                String.valueOf(threshold), protocol, datasetName, targetMetric, cryptoService.sha256Hex(consumerKey),
+                                    String datasetName, String targetMetric, QuerySpec spec, String consumerKey, String encrypted, String masked) {
+        String payload = String.join("|", "v2", getInstitutionId(), jobId, String.valueOf(partyId), String.valueOf(totalParties),
+                String.valueOf(threshold), protocol, datasetName, targetMetric, spec.denominator(), spec.operation(), spec.output(),
+                spec.comparator(), spec.threshold(), cryptoService.sha256Hex(consumerKey),
                 cryptoService.sha256Hex(encrypted), masked != null ? masked : "");
         return new AgentAttestation(payload, chamberVcService.signAttestation(payload));
     }
@@ -574,21 +683,25 @@ public class IntegrationAgentService {
             hosts.add(host);
         }
 
+        QuerySpec spec = QuerySpec.of(init.operation(), init.denominatorMetric(), init.outputMode(), init.comparator(), init.thresholdValue());
         LocalSecret local = resolveSecretAndProve(init, jobId);
+        String datasetName = init.datasetName() != null && !init.datasetName().isBlank() ? init.datasetName().trim() : "gelir_gider";
+        BigInteger denominator = spec.isRatio() ? readMetric(datasetName, spec.denominator()) : BigInteger.ZERO;
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("jobId", jobId);
         body.put("partyId", partyId - 1); // MP-SPDZ tarafları 0'dan başlar
         body.put("numParties", n);
         body.put("protocol", protocol);
-        String certPem = callEngine("/api/v1/mpc/party-prepare", body, 90).path("certPem").asText();
+        putQuery(body, spec);
+        String certPem = callEngine("/api/v1/mpc/party-prepare", body, 240).path("certPem").asText();
 
         long now = Instant.now().getEpochSecond();
         engineSessions.values().removeIf(s -> s.expiresAtEpochSec() < now);
         engineSessions.put(jobId, new EngineSession(local.secret(), newMask(protocol), protocol, partyId, n,
-                init.threshold(), hosts, certPem, now + 600,
-                init.datasetName() != null && !init.datasetName().isBlank() ? init.datasetName().trim() : "gelir_gider",
-                init.targetMetric() != null && !init.targetMetric().isBlank() ? init.targetMetric().trim() : "kar"));
+                init.threshold(), hosts, certPem, now + 600, datasetName,
+                init.targetMetric() != null && !init.targetMetric().isBlank() ? init.targetMetric().trim() : "kar",
+                denominator, spec));
         return new AgentEnginePrepareResponse(getInstitutionId(), partyId, local.proof(), certPem, "PREPARED_FOR_MP_SPDZ");
     }
 
@@ -620,12 +733,14 @@ public class IntegrationAgentService {
         body.put("numParties", session.totalParties());
         body.put("threshold", session.threshold());
         body.put("protocol", session.protocol());
+        putQuery(body, session.spec());
         body.put("input", session.secret().toString());
+        body.put("denominator", session.denominator().toString());
         body.put("mask", session.mask().toString());
         body.put("hosts", session.hosts());
         body.put("certs", engineCerts);
         body.put("basePort", request.basePort());
-        var result = callEngine("/api/v1/mpc/party-run", body, 90);
+        var result = callEngine("/api/v1/mpc/party-run", body, 200);
 
         String masked = result.path("maskedResult").isNull() ? null : result.path("maskedResult").asText(null);
         String encrypted = cryptoService.encryptWithRsaOaep(consumerKey, session.partyId() + ":" + session.mask());
@@ -635,7 +750,16 @@ public class IntegrationAgentService {
                 new EncryptedShamirShare(session.partyId(), encrypted, "RSA/ECB/OAEPWithSHA-256AndMGF1Padding"),
                 "MP_SPDZ_PARTY_COMPLETED",
                 attest(jobId, session.partyId(), session.totalParties(), session.threshold(), session.protocol(),
-                        session.datasetName(), session.targetMetric(), consumerKey, encrypted, masked));
+                        session.datasetName(), session.targetMetric(), session.spec(), consumerKey, encrypted, masked));
+    }
+
+    private static void putQuery(Map<String, Object> body, QuerySpec spec) {
+        body.put("operation", spec.operation());
+        body.put("outputMode", spec.output());
+        if (spec.isThreshold()) {
+            body.put("comparator", spec.comparator());
+            body.put("compareValue", spec.engineThreshold());
+        }
     }
 
     private void verifyRunManifest(AgentEngineRunRequest request, EngineSession session, String jobId) {
@@ -662,17 +786,9 @@ public class IntegrationAgentService {
         }
     }
 
-    /** Protokolün alanında düzgün dağılımlı maske: toplam + maske, toplam hakkında bilgi vermez. */
+    /** Sonucun alanından (halka 128, alan 255 bit) belirgin biçimde uzun maske: sonuç + maske, sonuç hakkında bilgi vermez. */
     private static BigInteger newMask(String protocol) {
-        java.security.SecureRandom random = new java.security.SecureRandom();
-        if ("semi2k".equals(protocol)) {
-            return new BigInteger(64, random);
-        }
-        BigInteger mask;
-        do {
-            mask = new BigInteger(PRIME.bitLength(), random);
-        } while (mask.compareTo(PRIME) >= 0);
-        return mask;
+        return new BigInteger("semi2k".equals(protocol) ? 186 : 310, new java.security.SecureRandom());
     }
 
     private com.fasterxml.jackson.databind.JsonNode callEngine(String path, Map<String, Object> body, int timeoutSeconds) {

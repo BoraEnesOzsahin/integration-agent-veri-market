@@ -88,7 +88,8 @@ public class AgentDatabaseService {
             return null;
         }
 
-        String sql = "SELECT COALESCE(MAX(" + column + "), 0) FROM " + table;
+        // Koşul kurumun o sütundaki toplamı üzerinden değerlendirilir
+        String sql = "SELECT COALESCE(SUM(" + column + "), 0) FROM " + table;
         try (Connection conn = DriverManager.getConnection(dbUrl, dbUsername, dbPassword);
              Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {

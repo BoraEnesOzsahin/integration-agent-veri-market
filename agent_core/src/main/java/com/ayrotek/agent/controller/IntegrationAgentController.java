@@ -329,13 +329,18 @@ public class IntegrationAgentController {
             String targetMetric,
             Map<String, Object> customAttributes,
             String schemaName,
-            String datasetName
+            String datasetName,
+            String operation,
+            String denominatorMetric,
+            String outputMode,
+            String comparator,
+            String thresholdValue
     ) {
         public AgentPipelineRequest(String jobId, String consumerPublicKey, int partyId, int threshold, int totalParties, String nonce, List<PredicateRequirement> requestedPredicates, BigInteger overrideSecret) {
-            this(jobId, consumerPublicKey, partyId, threshold, totalParties, nonce, requestedPredicates, overrideSecret, "income", null, null, null);
+            this(jobId, consumerPublicKey, partyId, threshold, totalParties, nonce, requestedPredicates, overrideSecret, "income", null, null, null, null, null, null, null, null);
         }
         public AgentPipelineRequest(String jobId, String consumerPublicKey, int partyId, int threshold, int totalParties, String nonce, List<PredicateRequirement> requestedPredicates, BigInteger overrideSecret, String targetMetric, Map<String, Object> customAttributes) {
-            this(jobId, consumerPublicKey, partyId, threshold, totalParties, nonce, requestedPredicates, overrideSecret, targetMetric, customAttributes, null, null);
+            this(jobId, consumerPublicKey, partyId, threshold, totalParties, nonce, requestedPredicates, overrideSecret, targetMetric, customAttributes, null, null, null, null, null, null, null);
         }
     }
 
@@ -376,10 +381,18 @@ public class IntegrationAgentController {
             @JsonProperty("peerEndpoints") Map<Integer, String> peerEndpoints,
             /** Koordinatörün imzaladığı kanonik iş bildirimi ve Ed25519 imzası (hex). */
             @JsonProperty("jobManifest") String jobManifest,
-            @JsonProperty("jobManifestSignature") String jobManifestSignature
+            @JsonProperty("jobManifestSignature") String jobManifestSignature,
+            /** SUM, PRODUCT veya RATIO. */
+            @JsonProperty("operation") String operation,
+            /** RATIO için payda sütunu. */
+            @JsonProperty("denominatorMetric") String denominatorMetric,
+            /** VALUE: sonuç açılır. THRESHOLD: yalnızca evet/hayır açılır. */
+            @JsonProperty("outputMode") String outputMode,
+            @JsonProperty("comparator") String comparator,
+            @JsonProperty("thresholdValue") String thresholdValue
     ) {
         public AgentInitAndSplitRequest(String jobId, int partyId, int threshold, int totalParties, String targetMetric, List<PredicateRequirement> requestedPredicates, String nonce, BigInteger overrideSecret, Map<String, Object> customAttributes, String schemaName) {
-            this(jobId, partyId, threshold, totalParties, targetMetric, "gelir_gider", null, requestedPredicates, nonce, overrideSecret, customAttributes, schemaName, null, null, null);
+            this(jobId, partyId, threshold, totalParties, targetMetric, "gelir_gider", null, requestedPredicates, nonce, overrideSecret, customAttributes, schemaName, null, null, null, null, null, null, null, null);
         }
     }
 
