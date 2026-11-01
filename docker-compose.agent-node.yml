@@ -124,6 +124,9 @@ services:
       - AGENT_MPC_ENGINE_URL=http://127.0.0.1:50051
       - AGENT_COORDINATOR_PUBLIC_KEY=${AGENT_COORDINATOR_PUBLIC_KEY:?Koordinatörün /api/v1/vc/platform-public-key değeri gerekli}
       - AGENT_SIGNING_KEY_FILE=/data/agent-signing.key
+      # Kurum yalnızca burada kayıtlı tüketicilerin imzaladığı sorguları çalıştırır: kimlik:anahtarHex,kimlik:anahtarHex
+      - AGENT_REQUIRE_CONSUMER_AUTH=${AGENT_REQUIRE_CONSUMER_AUTH:-true}
+      - AGENT_TRUSTED_CONSUMERS=${AGENT_TRUSTED_CONSUMERS:-}
     volumes:
       - agent_keys:/data
     depends_on:

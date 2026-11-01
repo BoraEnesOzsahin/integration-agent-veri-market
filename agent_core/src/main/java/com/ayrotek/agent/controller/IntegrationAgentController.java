@@ -54,6 +54,7 @@ public class IntegrationAgentController {
     @Operation(summary = "Kurum İçi ZKP Kanıtı Üret (AnonCreds Prover)",
                description = "Kurumun içerideki ham verisi üzerinde AnonCreds ZKP kanıtı üretir. Gelir, kredi skoru gibi ham değerler ASLA dışarı sızmaz, sadece matematiksel koşul ispatı döner.")
     public ResponseEntity<AgentZkpProofResponse> generateZkpProof(@RequestBody(required = false) AgentZkpProofRequest request) {
+        agentService.requireLegacyEndpointsAllowed();
         return ResponseEntity.ok(agentService.generateZkpProof(request));
     }
 
@@ -61,6 +62,7 @@ public class IntegrationAgentController {
     @Operation(summary = "Shamir Payı Hesapla ve Tüketici Açık Anahtarıyla Şifrele",
                description = "Kurum içi ham veriyi Shamir paylarına böler ve elde edilen payı doğrudan TÜKETİCİ AÇIK ANAHTARI (RSA-OAEP) ile şifreler. Platform koordinatörü dahil kimse payı göremez.")
     public ResponseEntity<AgentComputeShareResponse> computeAndEncryptShare(@RequestBody(required = false) AgentComputeShareRequest request) {
+        agentService.requireLegacyEndpointsAllowed();
         return ResponseEntity.ok(agentService.computeAndEncryptShare(request));
     }
 
@@ -68,6 +70,7 @@ public class IntegrationAgentController {
     @Operation(summary = "MPC Oturumu Başlat, ZKP İspatı Üret ve Payları Böl (Round 1)",
                description = "Kurum içi ham veri üzerinde ZKP ispatı üretir, sırrı Shamir paylarına böler. Kendi payını yerel oturum belleğinde tutar, diğer kurumlara gönderilecek payları döner.")
     public ResponseEntity<AgentInitAndSplitResponse> initAndSplit(@RequestBody AgentInitAndSplitRequest request) {
+        agentService.requireLegacyEndpointsAllowed();
         return ResponseEntity.ok(agentService.initAndSplit(request));
     }
 
@@ -107,6 +110,7 @@ public class IntegrationAgentController {
     @Operation(summary = "Eşten Gelen Şifreli Shamir Payını Kabul Et",
                description = "Başka bir kurum ajanından doğrudan (koordinatörü atlayarak) gelen, bu düğümün açık anahtarıyla şifrelenmiş payı çözer ve oturum belleğine kaydeder.")
     public ResponseEntity<ReceiveShareResponse> receiveEncryptedShare(@RequestBody EncryptedShareRequest request) {
+        agentService.requireLegacyEndpointsAllowed();
         return ResponseEntity.ok(agentService.receiveEncryptedShare(request));
     }
 
@@ -126,6 +130,7 @@ public class IntegrationAgentController {
     @Operation(summary = "Toplanan Payları Homomorfik Olarak Birleştir ve Tüketici Anahtarıyla Şifrele (Round 2)",
                description = "Kuruma ulaşmış olan tüm Shamir paylarını homomorfik olarak toplar ve elde edilen toplam payı Tüketici Açık Anahtarı ile şifreleyerek teslim eder.")
     public ResponseEntity<AgentAggregateResponse> aggregateAndEncrypt(@RequestBody AgentAggregateRequest request) {
+        agentService.requireLegacyEndpointsAllowed();
         return ResponseEntity.ok(agentService.aggregateAndEncrypt(request));
     }
 
@@ -334,15 +339,22 @@ public class IntegrationAgentController {
             String denominatorMetric,
             String outputMode,
             String comparator,
-            String thresholdValue
+            String thresholdValue,
+            ConsumerAuthorization consumerAuthorization
     ) {
         public AgentPipelineRequest(String jobId, String consumerPublicKey, int partyId, int threshold, int totalParties, String nonce, List<PredicateRequirement> requestedPredicates, BigInteger overrideSecret) {
-            this(jobId, consumerPublicKey, partyId, threshold, totalParties, nonce, requestedPredicates, overrideSecret, "income", null, null, null, null, null, null, null, null);
+            this(jobId, consumerPublicKey, partyId, threshold, totalParties, nonce, requestedPredicates, overrideSecret, "income", null, null, null, null, null, null, null, null, null);
         }
         public AgentPipelineRequest(String jobId, String consumerPublicKey, int partyId, int threshold, int totalParties, String nonce, List<PredicateRequirement> requestedPredicates, BigInteger overrideSecret, String targetMetric, Map<String, Object> customAttributes) {
-            this(jobId, consumerPublicKey, partyId, threshold, totalParties, nonce, requestedPredicates, overrideSecret, targetMetric, customAttributes, null, null, null, null, null, null, null);
+            this(jobId, consumerPublicKey, partyId, threshold, totalParties, nonce, requestedPredicates, overrideSecret, targetMetric, customAttributes, null, null, null, null, null, null, null, null);
         }
     }
+
+    /** Tüketicinin kayıtlı anahtarıyla imzaladığı sorgu yetkisi. Koordinatör anahtarı veya sorguyu değiştiremez. */
+    public record ConsumerAuthorization(
+            @JsonProperty("payload") String payload,
+            @JsonProperty("signature") String signature
+    ) {}
 
     /** Kurumun imzaladığı sonuç bildirimi: koordinatör içeriği değiştirirse tüketici fark eder. */
     public record AgentAttestation(String payload, String signature) {}
@@ -389,10 +401,11 @@ public class IntegrationAgentController {
             /** VALUE: sonuç açılır. THRESHOLD: yalnızca evet/hayır açılır. */
             @JsonProperty("outputMode") String outputMode,
             @JsonProperty("comparator") String comparator,
-            @JsonProperty("thresholdValue") String thresholdValue
+            @JsonProperty("thresholdValue") String thresholdValue,
+            @JsonProperty("consumerAuthorization") ConsumerAuthorization consumerAuthorization
     ) {
         public AgentInitAndSplitRequest(String jobId, int partyId, int threshold, int totalParties, String targetMetric, List<PredicateRequirement> requestedPredicates, String nonce, BigInteger overrideSecret, Map<String, Object> customAttributes, String schemaName) {
-            this(jobId, partyId, threshold, totalParties, targetMetric, "gelir_gider", null, requestedPredicates, nonce, overrideSecret, customAttributes, schemaName, null, null, null, null, null, null, null, null);
+            this(jobId, partyId, threshold, totalParties, targetMetric, "gelir_gider", null, requestedPredicates, nonce, overrideSecret, customAttributes, schemaName, null, null, null, null, null, null, null, null, null);
         }
     }
 
@@ -415,7 +428,9 @@ public class IntegrationAgentController {
             int partyId,
             AgentZkpProofResponse zkpProof,
             String certPem,
-            String status
+            String status,
+            /** İş sertifikasının kurum anahtarıyla imzası: eşler sahte tarafı bununla ayırır. */
+            String certSignature
     ) {}
 
     public record AgentEngineRunRequest(
@@ -426,7 +441,11 @@ public class IntegrationAgentController {
             @JsonProperty("consumerPublicKey") String consumerPublicKey,
             /** Kanonik: jobId|protokol|eşik|basePort|tüketiciAnahtarSHA256|1=sertSHA256,2=sertSHA256 */
             @JsonProperty("runManifest") String runManifest,
-            @JsonProperty("runManifestSignature") String runManifestSignature
+            @JsonProperty("runManifestSignature") String runManifestSignature,
+            /** partyId -> iş sertifikasının kurum imzası. */
+            @JsonProperty("certSignatures") Map<Integer, String> certSignatures,
+            /** partyId -> sertifikayı imzalayan kurum. */
+            @JsonProperty("certInstitutions") Map<Integer, String> certInstitutions
     ) {}
 
     public record AgentEngineRunResponse(
