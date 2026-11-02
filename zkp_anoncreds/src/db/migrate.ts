@@ -14,6 +14,37 @@ export async function runMigrations(): Promise<void> {
       $$ LANGUAGE plpgsql;
     `)
 
+    // Kurumun kalıcı belgesi: yayında yenilenir, sorgular buradan kanıt üretir
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS institution_credentials (
+        key                 TEXT PRIMARY KEY,
+        institution_id      TEXT        NOT NULL,
+        table_name          TEXT        NOT NULL,
+        did                 TEXT        NOT NULL,
+        schema_id           TEXT        NOT NULL,
+        cred_def_id         TEXT        NOT NULL,
+        link_secret_id      TEXT        NOT NULL,
+        held_credential_id  TEXT        NOT NULL,
+        credential          JSONB       NOT NULL,
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `)
+
+    // Koşul kanıtı taahhütleri: değer ve tuz kurum dışına çıkmaz, yalnızca taahhüt yayınlanır
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS predicate_commitments (
+        institution_id  TEXT        NOT NULL,
+        table_name      TEXT        NOT NULL,
+        metric          TEXT        NOT NULL,
+        value           TEXT        NOT NULL,
+        salt            TEXT        NOT NULL,
+        commitment      TEXT        NOT NULL,
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (institution_id, table_name, metric)
+      );
+    `)
+
     // Tables
     await client.query(`
       CREATE TABLE IF NOT EXISTS schemas (

@@ -1,61 +1,44 @@
 package com.ayrotek.agent.service;
 
 import com.ayrotek.agent.controller.IntegrationAgentController.*;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
-import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 
 /**
- * Kurum İçi Entegrasyon Ajanı - Sıfır Bilgi İspatı (ZKP) Servisi.
- *
- * Sorumluluklar:
- * 1. Hyperledger AnonCreds motoruyla iletişim (Port 3000 / Rust CL-Signatures).
- * 2. Yerel veritabanı veya kurum nitelikleri üzerinden dinamik predikat denetimi.
- * 3. Standalone yedek modda ZKP kanıtı üretimi.
+ * Kurumun Hyperledger AnonCreds motoruyla konuşur: yayında kalıcı belgeyi düzenler, sorguda kanıt üretir.
+ * Belgeyi kurum kendisi imzalar; kanıt "bu kurumun imzaladığı değer koşulu sağlıyor" der, değerin gerçekliğini garanti etmez.
  */
 @Service
 public class AgentZkpProverService {
 
     private static final Logger log = LoggerFactory.getLogger(AgentZkpProverService.class);
 
-    /** true ise AnonCreds ulaşılamazken uydurma "doğrulanamaz" kanıt döner. YALNIZCA demo; varsayılan kapalı. */
-    @Value("${agent.zkp.allow-standalone-fallback:false}")
-    private boolean allowStandaloneFallback = false;
+    /** Devre 64 bit işaretli değer kapsar. */
+    private static final java.math.BigInteger PROVABLE_LIMIT = java.math.BigInteger.ONE.shiftLeft(63);
 
     @Value("${anoncreds.service.url:http://localhost:3000}")
     private String anonCredsServiceUrl = "http://localhost:3000";
 
-    private final AgentDatabaseService databaseService;
-    private final HttpClient httpClient;
+    private final HttpClient httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public AgentZkpProverService(AgentDatabaseService databaseService) {
-        this.databaseService = databaseService;
-        this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(3))
-                .build();
-    }
-
-    public String getAnonCredsServiceUrl() {
-        return anonCredsServiceUrl;
-    }
-
-    /**
-     * Hyperledger AnonCreds motorunun (port 3000) erişilebilirliğini denetler.
-     */
     public boolean isAnonCredsEngineAvailable() {
         try {
             HttpRequest req = HttpRequest.newBuilder()
@@ -63,197 +46,139 @@ public class AgentZkpProverService {
                     .timeout(Duration.ofSeconds(2))
                     .GET()
                     .build();
-            HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
-            return resp.statusCode() == 200;
-        } catch (Exception e) {
+            return httpClient.send(req, HttpResponse.BodyHandlers.ofString()).statusCode() == 200;
+        } catch (IOException e) {
             log.debug("[AgentZkpProver] AnonCreds motoruna ulaşılamadı: {}", e.getMessage());
+            return false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
             return false;
         }
     }
 
-    /**
-     * Kurum içi AnonCreds ZKP kanıtı üretir.
-     */
-    public AgentZkpProofResponse generateZkpProof(AgentZkpProofRequest request, String institutionId, Map<String, Object> baseAttributes) {
+    public static boolean isProvable(java.math.BigInteger value) {
+        return value.compareTo(PROVABLE_LIMIT.negate()) >= 0 && value.compareTo(PROVABLE_LIMIT) < 0;
+    }
+
+    private record ZkpResponse(int status, JsonNode body) {}
+
+    private ZkpResponse post(String path, Map<String, Object> body, int timeoutSeconds) {
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(anonCredsServiceUrl + path))
+                    .timeout(Duration.ofSeconds(timeoutSeconds))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body), StandardCharsets.UTF_8))
+                    .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            return new ZkpResponse(response.statusCode(), objectMapper.readTree(response.body()));
+        } catch (IOException e) {
+            log.warn("[AgentZkpProver] ZKP motoru hatası: {}", e.getMessage());
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Kurumun ZKP motoruna ulaşılamadı.");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "ZKP işlemi kesildi.");
+        }
+    }
+
+    public record PublishedCredential(String credDefId, Map<String, String> commitments) {}
+
+    /** Yayında çağrılır: kurum kimliği belgesini düzenler ve her kanıtlanabilir sütun için taahhüt üretir. */
+    public PublishedCredential issueInstitutionCredential(String institutionId, String tableName, Map<String, java.math.BigInteger> metrics) {
+        Map<String, Object> provable = new LinkedHashMap<>();
+        metrics.forEach((column, value) -> {
+            if (isProvable(value)) {
+                provable.put(column, value.toString());
+            }
+        });
+        ZkpResponse response = post("/api/institution/credential", Map.of(
+                "institutionId", institutionId,
+                "tableName", tableName,
+                "attributeValues", Map.of("dataset_id", "DS-" + institutionId, "institution_id", institutionId),
+                "metrics", provable), 120);
+        if (response.status() != 200) {
+            log.error("[AgentZkpProver] Belge düzenlenemedi: {}", response.body().path("error").asText());
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Kurum belgesi düzenlenemedi.");
+        }
+        Map<String, String> commitments = objectMapper.convertValue(response.body().path("commitments"), new TypeReference<>() {});
+        return new PublishedCredential(response.body().path("credDefId").asText(), commitments);
+    }
+
+    private Map<String, Object> createProof(String institutionId, String tableName, String nonce, List<Map<String, Object>> predicates) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("institutionId", institutionId);
+        body.put("tableName", tableName);
+        body.put("nonce", nonce);
+        body.put("predicates", predicates);
+        ZkpResponse response = post("/api/institution/proof", body, 30);
+        if (response.status() == 404) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, institutionId + " bu veri setini henüz yayınlamadı.");
+        }
+        if (response.status() == 422) {
+            log.warn("[AgentZkpProver] Kanıt üretilemedi: {}", response.body().path("error").asText());
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    institutionId + " verisi yayından sonra değişmiş. Kurumun veri setini yeniden yayınlaması gerekir.");
+        }
+        if (response.status() != 200) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Kurumun ZKP motoru kanıt üretemedi.");
+        }
+        return objectMapper.convertValue(response.body().path("artifacts"), new TypeReference<>() {});
+    }
+
+    /** Kurum kimliği kanıtı: belgenin bu kuruma ait olduğunu gösterir, hesaplanan değer hakkında bir şey söylemez. */
+    public AgentZkpProofResponse generateZkpProof(AgentZkpProofRequest request, String institutionId) {
         long startTime = System.currentTimeMillis();
-        String nonce = (request != null && request.nonce() != null && !request.nonce().isBlank())
-                ? request.nonce()
-                : UUID.randomUUID().toString();
-
-        Map<String, Object> effectiveAttrs = new LinkedHashMap<>();
-        if (baseAttributes != null) {
-            effectiveAttrs.putAll(baseAttributes);
-        }
-        if (request != null && request.customAttributes() != null && !request.customAttributes().isEmpty()) {
-            effectiveAttrs.putAll(request.customAttributes());
-        }
-
-        List<PredicateRequirement> predicates = (request != null && request.requestedPredicates() != null)
-                ? request.requestedPredicates()
-                : Collections.emptyList();
-
-        // Dinamik Predicate Çözümleme: PostgreSQL veritabanından veya kurum niteliklerinden al
-        for (PredicateRequirement pred : predicates) {
-            if (pred == null || pred.name() == null) continue;
-
-            if (databaseService.isDbConnected()) {
-                if (!effectiveAttrs.containsKey(pred.name()) || effectiveAttrs.get(pred.name()) == null) {
-                    try {
-                        Long dbVal = databaseService.queryPredicateAttribute(request != null ? request.datasetName() : null, pred.name());
-                        if (dbVal != null) {
-                            effectiveAttrs.put(pred.name(), String.valueOf(dbVal));
-                        }
-                    } catch (SQLException e) {
-                        log.error("[AgentZkpProver - {}] ZKP Predicate DB Hatası (Kolon Bulunamadı): {}", institutionId, e.getMessage());
-                        throw new org.springframework.web.server.ResponseStatusException(
-                                org.springframework.http.HttpStatus.BAD_REQUEST,
-                                "Veritabanı Şema Hatası: ZKP şartında aranan '" + pred.name() + "' kolonu " + institutionId + " kurumunun veritabanında mevcut değildir! [PostgreSQL: " + e.getMessage() + "]"
-                        );
-                    }
-                }
+        List<Map<String, Object>> predicates = new ArrayList<>();
+        if (request.requestedPredicates() != null) {
+            for (PredicateRequirement p : request.requestedPredicates()) {
+                predicates.add(Map.of("name", p.name(), "predicateType", p.pType() != null ? p.pType() : ">=", "predicateValue", p.pValue()));
             }
         }
-
-        Map<String, Boolean> predicatesProved = new LinkedHashMap<>();
-        for (PredicateRequirement pred : predicates) {
-            if (pred == null || pred.name() == null) continue;
-            Object rawVal = effectiveAttrs.get(pred.name());
-            long actual = 0;
-            if (rawVal != null) {
-                try {
-                    actual = Long.parseLong(rawVal.toString());
-                } catch (NumberFormatException ignored) {}
-            }
-            String type = pred.pType() != null ? pred.pType().trim() : ">=";
-            boolean satisfied = switch (type) {
-                case ">=" -> actual >= pred.pValue();
-                case "<=" -> actual <= pred.pValue();
-                case ">"  -> actual > pred.pValue();
-                case "<"  -> actual < pred.pValue();
-                case "==" -> actual == pred.pValue();
-                default   -> false;
-            };
-            predicatesProved.put(pred.name() + " " + type + " " + pred.pValue(), satisfied);
-        }
-
-        String schemaName = (request != null && request.schemaName() != null && !request.schemaName().isBlank())
-                ? request.schemaName()
-                : "consortium_zkp_schema";
-
-        String reqId = (request != null && request.presentationRequestId() != null)
-                ? request.presentationRequestId()
-                : "req-zkp-" + UUID.randomUUID().toString().substring(0, 8);
-
-        String presentationId = "pres-" + UUID.randomUUID().toString().substring(0, 8);
-        String proofJson = null;
-        String securityGuarantee = null;
-        Map<String, Object> artifacts = null;
-
-        // Gerçek Hyperledger AnonCreds Motoru (Port 3000 / Node.js & Rust) ile İspat Üretimi
-        if (isAnonCredsEngineAvailable()) {
-            try {
-                log.info("[AgentZkpProver] AnonCreds motoruna ({}) Dinamik ZKP ({}) talebi gönderiliyor...", anonCredsServiceUrl, schemaName);
-
-                Map<String, Object> reqBodyMap = new LinkedHashMap<>();
-                reqBodyMap.put("schemaName", schemaName);
-                reqBodyMap.put("attributeValues", effectiveAttrs);
-                reqBodyMap.put("revealedAttributes", List.of("dataset_id", "institution_id"));
-                if (nonce != null && nonce.matches("\\d{1,24}")) {
-                    reqBodyMap.put("nonce", nonce); // doğrulayıcının nonce'u sunum isteğine bağlanır (replay koruması)
-                }
-
-                List<Map<String, Object>> anoncredsPreds = new ArrayList<>();
-                for (PredicateRequirement p : predicates) {
-                    if (p == null) continue;
-                    anoncredsPreds.add(Map.of(
-                            "name", p.name(),
-                            "predicateType", p.pType() != null ? p.pType() : ">=",
-                            "predicateValue", p.pValue()
-                    ));
-                }
-                reqBodyMap.put("predicates", anoncredsPreds);
-
-                String payloadJson = objectMapper.writeValueAsString(reqBodyMap);
-
-                HttpRequest httpReq = HttpRequest.newBuilder()
-                        .uri(URI.create(anonCredsServiceUrl + "/api/test/selective-disclosure"))
-                        .timeout(Duration.ofSeconds(30))
-                        .header("Content-Type", "application/json")
-                        .POST(HttpRequest.BodyPublishers.ofString(payloadJson, StandardCharsets.UTF_8))
-                        .build();
-
-                HttpResponse<String> httpRes = httpClient.send(httpReq, HttpResponse.BodyHandlers.ofString());
-                if (httpRes.statusCode() == 200) {
-                    JsonNode rootNode = objectMapper.readTree(httpRes.body());
-                    JsonNode artifactsNode = rootNode.path("artifacts");
-                    if (!artifactsNode.isMissingNode() && !artifactsNode.isNull()) {
-                        artifacts = objectMapper.convertValue(artifactsNode, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
-                    }
-                    String rawPresId = rootNode.path("steps").path("presentation").path("id").asText();
-                    if (rawPresId != null && !rawPresId.isBlank()) {
-                        presentationId = rawPresId;
-                        // Gerçek Camenisch-Lysyanskaya kriptografik kanıt detayını çek
-                        HttpRequest detailReq = HttpRequest.newBuilder()
-                                .uri(URI.create(anonCredsServiceUrl + "/api/verify/presentation/" + rawPresId))
-                                .timeout(Duration.ofSeconds(5))
-                                .GET()
-                                .build();
-                        HttpResponse<String> detailRes = httpClient.send(detailReq, HttpResponse.BodyHandlers.ofString());
-                        if (detailRes.statusCode() == 200) {
-                            JsonNode detailNode = objectMapper.readTree(detailRes.body());
-                            JsonNode proofNode = detailNode.path("data").path("presentation");
-                            if (!proofNode.isMissingNode() && !proofNode.isNull()) {
-                                proofJson = proofNode.toString();
-                            }
-                        }
-                    }
-                    if (proofJson == null) {
-                        proofJson = httpRes.body();
-                    }
-                    securityGuarantee = "Ham kurum verileri kurum içinde gizli tutuldu; gerçek Hyperledger AnonCreds (CL-Signature / Rust) sıfır-bilgi kanıtı başarıyla üretildi.";
-                    log.info("[AgentZkpProver] Gerçek AnonCreds ZKP kanıtı üretildi. Presentation ID: {}", presentationId);
-                } else {
-                    log.warn("[AgentZkpProver] AnonCreds motoru HTTP {} döndü, standalone fallback kullanılıyor.", httpRes.statusCode());
-                }
-            } catch (Exception e) {
-                log.warn("[AgentZkpProver] AnonCreds motor çağrısında hata: {}, standalone fallback kullanılıyor.", e.getMessage());
-            }
-        }
-
-        if (proofJson == null) {
-            if (!allowStandaloneFallback) {
-                throw new org.springframework.web.server.ResponseStatusException(
-                        org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
-                        "AnonCreds ZKP motoru kanıt üretemedi (" + anonCredsServiceUrl + "). Sahte/standalone kanıta izin verilmiyor "
-                                + "(agent.zkp.allow-standalone-fallback=false).");
-            }
-            proofJson = "{\"anoncreds_token\":\"zkp-" + UUID.randomUUID() + "\",\"verified\":false,\"mode\":\"STANDALONE_FALLBACK_UNVERIFIABLE\"}";
-            securityGuarantee = "UYARI: Standalone demo modu. Bu kanıt kriptografik olarak DOĞRULANAMAZ.";
-        }
-        // Yerel hesaplanan predicate sonucu başarısızsa kanıt üretilmiş gibi davranma
-        if (predicatesProved.containsValue(Boolean.FALSE)) {
-            throw new org.springframework.web.server.ResponseStatusException(
-                    org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY,
-                    "Kurum verisi istenen ZKP koşulunu sağlamıyor: " + predicatesProved);
-        }
-
-        long elapsed = Math.max(1, System.currentTimeMillis() - startTime);
-
+        Map<String, Object> artifacts = createProof(institutionId, request.datasetName(), request.nonce(), predicates);
         return new AgentZkpProofResponse(
-                presentationId,
+                "pres-" + UUID.randomUUID().toString().substring(0, 8),
                 institutionId,
-                reqId,
-                nonce,
+                request.presentationRequestId(),
+                request.nonce(),
                 "ANONCREDS",
-                Map.of("dataset_id", effectiveAttrs.getOrDefault("dataset_id", "DS-" + institutionId), "institution_id", institutionId),
-                predicatesProved,
-                proofJson,
-                elapsed,
+                Map.of("dataset_id", "DS-" + institutionId, "institution_id", institutionId),
+                Map.of(),
+                null,
+                Math.max(1, System.currentTimeMillis() - startTime),
                 Instant.now().toString(),
                 "PROOF_GENERATED_ON_PREMISE",
                 false,
-                securityGuarantee,
+                "Kurumun yayında düzenlediği kalıcı belgeden üretildi.",
                 artifacts
         );
+    }
+
+    /** Koşul kanıtı (PLONK): değeri açmadan taahhüt edilen değerin koşulu sağladığını gösterir. */
+    public Map<String, Object> provePredicate(String institutionId, String tableName, String metric, java.math.BigInteger currentValue,
+                                              String comparator, java.math.BigInteger limit, String nonce) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("institutionId", institutionId);
+        body.put("tableName", tableName);
+        body.put("metric", metric);
+        body.put("currentValue", currentValue.toString());
+        body.put("comparator", comparator);
+        body.put("limit", limit.toString());
+        body.put("nonce", nonce);
+        ZkpResponse response = post("/api/institution/predicate-proof", body, 60);
+        if (response.status() == 404) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, institutionId + " bu sütunu henüz yayınlamadı. Veri setinin yeniden yayınlanması gerekir.");
+        }
+        if (response.status() == 422) {
+            log.warn("[AgentZkpProver] Koşul kanıtı üretilemedi: {}", response.body().path("code").asText());
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    institutionId + " verisi yayından sonra değişmiş. Kurumun veri setini yeniden yayınlaması gerekir.");
+        }
+        if (response.status() != 200) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Kurumun ZKP motoru kanıt üretemedi.");
+        }
+        Map<String, Object> proof = new LinkedHashMap<>();
+        proof.put("proof", response.body().path("proof"));
+        proof.put("publicSignals", response.body().path("publicSignals"));
+        return proof;
     }
 }

@@ -6,8 +6,8 @@ spring:
     name: manager-service
 
 node:
-  id: ${NODE_ID:${AGENT_ID:Banka_A}}
-  name: ${NODE_NAME:${AGENT_NAME:Banka A Kurum İçi Yönetici}}
+  id: ${NODE_ID}
+  name: ${NODE_NAME}
   agent-url: ${AGENT_PUBLIC_URL:http://localhost:8083}
   manager-url: ${MANAGER_PUBLIC_URL:http://localhost:8093}
   supported-datasets: ${SUPPORTED_DATASETS:bankalar,finans,kredi,consortium}
@@ -24,3 +24,9 @@ management:
     web:
       exposure:
         include: health,info
+
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false

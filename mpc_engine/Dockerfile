@@ -33,7 +33,7 @@ RUN git init -q . \
 RUN echo "USE_NTL = 0" > CONFIG.mine \
     && echo "USE_KOS = 1" >> CONFIG.mine \
     && echo "ARCH = -mtune=generic -msse4.1 -msse4.2 -maes -mpclmul -mavx -mavx2 -mbmi2 -madx" >> CONFIG.mine \
-    && make -j"$(nproc)" shamir-party.x malicious-shamir-party.x semi2k-party.x
+    && make -j"$(nproc)" malicious-shamir-party.x semi2k-party.x
 
 # Aşama 2: Çalışma imajı (yalnızca ikililer, derleyici ve köprü servisi)
 FROM python:3.10-slim-bookworm
@@ -52,7 +52,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app/mp-spdz
 
-COPY --from=builder /src/shamir-party.x /src/malicious-shamir-party.x /src/semi2k-party.x ./
+COPY --from=builder /src/malicious-shamir-party.x /src/semi2k-party.x ./
 COPY --from=builder /src/libSPDZ.so* ./
 COPY --from=builder /src/compile.py ./
 COPY --from=builder /src/Compiler ./Compiler
@@ -60,11 +60,6 @@ COPY --from=builder /src/Scripts ./Scripts
 COPY --from=builder /src/Programs ./Programs
 
 COPY mp_spdz_service.py ./
-COPY Programs/Source/verimarket_mpc.mpc ./Programs/Source/
-
-# Devreyi önceden derle (ikililerle aynı sürüm derleyicinin çalıştığının da kanıtı)
-RUN python compile.py -P 2305843009213693951 verimarket_mpc
-
 # SSL özel anahtarları imaja gömülmez; Player-Data çalışma anında doldurulur.
 RUN mkdir -p Player-Data
 
@@ -73,5 +68,5 @@ EXPOSE 50051
 ENV MP_SPDZ_PORT=50051
 ENV LD_LIBRARY_PATH=/app/mp-spdz
 
-# MP-SPDZ REST API Köprüsünü Başlat
+# Kurumun MP-SPDZ köprüsü: yalnızca aynı makinedeki ajan çağırır
 CMD ["python", "mp_spdz_service.py"]

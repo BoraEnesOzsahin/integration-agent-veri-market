@@ -33,6 +33,7 @@ public class AgentChamberVcService {
 
     private final AgentDatabaseService databaseService;
     private final AgentCryptoService cryptoService;
+    private final AgentZkpProverService zkpProverService;
     private final ObjectMapper objectMapper = new ObjectMapper();
     /** İmza için kanonik (anahtarları sıralı) JSON üretir. */
     private final ObjectMapper canonicalMapper = new ObjectMapper()
@@ -41,8 +42,8 @@ public class AgentChamberVcService {
     /** Kurumun kalıcı Ed25519 imza anahtarının dosyası. Boşsa ${user.home}/.verimarket/agent-<kurum>-ed25519.key. */
     @Value("${agent.signing.key-file:}")
     private String signingKeyFile = "";
-    @Value("${agent.institution-id:${AGENT_ID:Banka_A}}")
-    private String configuredInstitutionId = "Banka_A";
+    @Value("${agent.institution-id}")
+    private String configuredInstitutionId;
     private volatile KeyPair signingKeyPair;
 
     private synchronized KeyPair signingKey(String institutionId) {
@@ -80,7 +81,8 @@ public class AgentChamberVcService {
     private Map<String, Object> pedersenClaim(String col, long value) {
         BigInteger v = BigInteger.valueOf(value);
         BigInteger r = PedersenCommitment.randomBlinding();
-        BigInteger c = PedersenCommitment.commit(v, r);
+        // Negatif değer (örn. zarar) grup içinde mod q ile temsil edilir
+        BigInteger c = PedersenCommitment.commit(v.mod(PedersenCommitment.Q), r);
         String sealedOpening = cryptoService.sealForThisNode(col + "|" + v + "|" + r);
         Map<String, Object> claim = new LinkedHashMap<>();
         claim.put("dataType", "BigInteger");
@@ -91,9 +93,10 @@ public class AgentChamberVcService {
         return claim;
     }
 
-    public AgentChamberVcService(AgentDatabaseService databaseService, AgentCryptoService cryptoService) {
+    public AgentChamberVcService(AgentDatabaseService databaseService, AgentCryptoService cryptoService, AgentZkpProverService zkpProverService) {
         this.databaseService = databaseService;
         this.cryptoService = cryptoService;
+        this.zkpProverService = zkpProverService;
     }
 
     /**
@@ -103,12 +106,16 @@ public class AgentChamberVcService {
      */
     public Map<String, Object> mintChamberVc(String chamberId, String category, String tableName,
                                              String institutionId, String institutionName, int serverPort) {
-        String table = (tableName != null && !tableName.isBlank()) ? tableName.trim().toLowerCase() : "gelir_gider";
-        String cat = (category != null && !category.isBlank()) ? category.trim().toLowerCase() : "gelir_gider";
+        if (tableName == null || tableName.isBlank()) {
+            throw new IllegalArgumentException("Tablo adı zorunludur.");
+        }
+        String table = tableName.trim().toLowerCase();
+        String cat = (category != null && !category.isBlank()) ? category.trim().toLowerCase() : table;
 
         // Şema tablonun gerçek sayısal sütunlarından gelir; okunamayan değer 0 sayılmaz
         List<String> targetColumns;
         Map<String, Object> claims = new LinkedHashMap<>();
+        Map<String, BigInteger> metrics = new LinkedHashMap<>();
         try {
             targetColumns = databaseService.listMetricColumns(table);
             if (targetColumns.isEmpty()) {
@@ -118,6 +125,7 @@ public class AgentChamberVcService {
             for (String col : targetColumns) {
                 BigInteger dbVal = databaseService.queryLocalDatabaseMetric(table, col, institutionId);
                 claims.put(col, pedersenClaim(col, dbVal.longValue()));
+                metrics.put(col, dbVal);
             }
         } catch (java.sql.SQLException e) {
             throw new org.springframework.web.server.ResponseStatusException(
@@ -133,87 +141,21 @@ public class AgentChamberVcService {
         log.info("[AgentChamberVc - {}] DMZ içi yerel PostgreSQL'den okundu: Tablo={}, Sütunlar={}",
                 institutionId, table, targetColumns);
 
-        return buildAndSignVc(chamberId, cat, table, institutionId, institutionName, serverPort, claims, targetColumns, List.of("donem", "yil"));
-    }
-
-    /**
-     * Kullanıcının seçtiği tablodan ve kolonlardan Pedersen Taahhüdü ve AnonCreds ZKP ile mühürlü W3C VC üretir.
-     */
-    @SuppressWarnings("unchecked")
-    public Map<String, Object> mintCustomChamberVc(Map<String, Object> req, String institutionId,
-                                                   String institutionName, int serverPort) {
-        String chamberId = req.getOrDefault("chamberId", "chamber-" + UUID.randomUUID().toString().substring(0, 8)).toString();
-        String category = req.getOrDefault("category", "dynamic_dataset").toString();
-        String table = req.getOrDefault("tableName", "gelir_gider").toString().trim().toLowerCase();
-
-        List<String> commitmentCols = req.containsKey("commitmentColumns")
-                ? (List<String>) req.get("commitmentColumns")
-                : List.of("kar", "gelir", "gider");
-
-        List<String> publicCols = req.containsKey("publicColumns")
-                ? (List<String>) req.get("publicColumns")
-                : List.of("donem", "yil");
-
-        Map<String, String> columnMapping = req.containsKey("columnMapping")
-                ? (Map<String, String>) req.get("columnMapping")
-                : Collections.emptyMap();
-
-        Map<String, Object> overrideValues = req.containsKey("overrideValues")
-                ? (Map<String, Object>) req.get("overrideValues")
-                : Collections.emptyMap();
-
-        Map<String, Object> claims = new LinkedHashMap<>();
-
-        // 1. Pedersen Taahhüdü ile Gizlenen Kolonlar
-        for (String col : commitmentCols) {
-            long metricVal = 0L;
-            if (overrideValues.containsKey(col)) {
-                Object ov = overrideValues.get(col);
-                if (ov instanceof Number) {
-                    metricVal = ((Number) ov).longValue();
-                } else {
-                    try {
-                        metricVal = Long.parseLong(ov.toString());
-                    } catch (Exception ignored) {}
-                }
-            } else {
-                String targetCol = columnMapping.getOrDefault(col, col);
-                try {
-                    BigInteger val = databaseService.queryLocalDatabaseMetric(table, targetCol, institutionId);
-                    if (val != null) {
-                        metricVal = val.longValue();
-                    }
-                } catch (java.sql.SQLException e) {
-                    throw new org.springframework.web.server.ResponseStatusException(
-                            org.springframework.http.HttpStatus.BAD_REQUEST, "'" + table + "." + targetCol + "' okunamadı (" + institutionId + "): " + e.getMessage());
-                }
-            }
-
-            claims.put(col, pedersenClaim(col, metricVal));
-        }
-
-        // 2. Dinamik Açık Metaveri Kolonları
-        LocalDate now = LocalDate.now();
-        int currentQuarter = (now.getMonthValue() - 1) / 3 + 1;
-        for (String pCol : publicCols) {
-            if (overrideValues.containsKey(pCol)) {
-                claims.put(pCol, overrideValues.get(pCol));
-            } else if ("donem".equalsIgnoreCase(pCol)) {
-                claims.put("donem", now.getYear() + "-Q" + currentQuarter);
-            } else if ("yil".equalsIgnoreCase(pCol)) {
-                claims.put("yil", now.getYear());
-            } else {
-                claims.put(pCol, "META_" + pCol.toUpperCase());
-            }
-        }
-
-        return buildAndSignVc(chamberId, category, table, institutionId, institutionName, serverPort, claims, commitmentCols, publicCols);
+        // Koşul kanıtları bu belgeden üretilir; düzenlenemezse yayın da yapılmaz
+        var published = zkpProverService.issueInstitutionCredential(institutionId, table, metrics);
+        published.commitments().forEach((column, commitment) -> {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> claim = (Map<String, Object>) claims.get(column);
+            claim.put("predicateCommitment", commitment);
+        });
+        String credDefId = published.credDefId();
+        return buildAndSignVc(chamberId, cat, table, institutionId, institutionName, serverPort, claims, targetColumns, List.of("donem", "yil"), credDefId);
     }
 
     private Map<String, Object> buildAndSignVc(String chamberId, String category, String table,
                                               String institutionId, String institutionName, int serverPort,
                                               Map<String, Object> claims,
-                                              List<String> commitmentCols, List<String> publicCols) {
+                                              List<String> commitmentCols, List<String> publicCols, String credDefId) {
         Map<String, Object> vc = new LinkedHashMap<>();
         vc.put("@context", List.of("https://www.w3.org/2018/credentials/v1", "https://schema.ayrotek.com/v1"));
         vc.put("id", "urn:uuid:" + UUID.randomUUID());
@@ -226,6 +168,7 @@ public class AgentChamberVcService {
         subject.put("institutionName", institutionName);
         subject.put("schemaVersion", "1.0.0");
         subject.put("schemaName", "schema:ayrotek:" + category + ":v1");
+        subject.put("zkpCredentialDefinitionId", credDefId);
         subject.put("claims", claims);
         vc.put("credentialSubject", subject);
 

@@ -20,28 +20,20 @@ from urllib.parse import urlparse
 
 PORT = int(os.environ.get("MP_SPDZ_PORT", 50051))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# 64-bit Mersenne Asalı: 2^61 - 1
-DEFAULT_PRIME = 2305843009213693951
 
 MPSPDZ_HOME = os.environ.get("MP_SPDZ_HOME", BASE_DIR)
 RESULT_TAG = "AYROTEK_VERIMARKET_MPC_RESULT:"
 JOBS_DIR = os.environ.get("MP_SPDZ_JOBS_DIR", os.path.join(tempfile.gettempdir(), "mpc-jobs"))
-BIND_ADDRESS = os.environ.get("MP_SPDZ_BIND", "0.0.0.0")
+BIND_ADDRESS = os.environ.get("MP_SPDZ_BIND", "127.0.0.1")
 PARTY_TIMEOUT = int(os.environ.get("MP_SPDZ_PARTY_TIMEOUT", 180))
 COMPILE_LOCK = threading.Lock()
-PROTO_BIN = {"shamir": "shamir-party.x", "malicious-shamir": "malicious-shamir-party.x",
-             "semi2k": "semi2k-party.x", "mascot": "mascot-party.x"}
+PROTO_BIN = {"malicious-shamir": "malicious-shamir-party.x", "semi2k": "semi2k-party.x"}
 
 def find_binary(protocol):
-    path = os.path.join(MPSPDZ_HOME, PROTO_BIN.get(protocol, "shamir-party.x"))
+    if protocol not in PROTO_BIN:
+        return None
+    path = os.path.join(MPSPDZ_HOME, PROTO_BIN[protocol])
     return path if os.path.isfile(path) and os.access(path, os.X_OK) else None
-
-def circuit_source(n):
-    return ("from Compiler.types import sint\n"
-            "total = sint(0)\n"
-            "for i in range(%d):\n"
-            "    total = total + sint.get_input_from(i)\n"
-            "print_ln('%s%%s', total.reveal())\n") % (n, RESULT_TAG)
 
 def is_ring_protocol(protocol):
     return protocol == "semi2k"
@@ -54,69 +46,11 @@ def corruption_bound(threshold, n):
         raise ValueError("%d taraf için geçersiz eşik: %d (izin verilen en fazla %d)" % (n, threshold, (n - 1) // 2 + 1))
     return corrupt
 
-def ensure_compiled(n, protocol="shamir"):
-    ring = is_ring_protocol(protocol)
-    name = ("verimarket_sum_r64_n%d" if ring else "verimarket_sum_n%d") % n
-    src = os.path.join(MPSPDZ_HOME, "Programs", "Source", name + ".mpc")
-    os.makedirs(os.path.dirname(src), exist_ok=True)
-    with open(src, "w") as fh:
-        fh.write(circuit_source(n))
-    field_args = ["-R", "64"] if ring else ["-P", str(DEFAULT_PRIME)]
-    p = subprocess.run([sys.executable, os.path.join(MPSPDZ_HOME, "compile.py")] + field_args + [name],
-                       cwd=MPSPDZ_HOME, capture_output=True, text=True, timeout=120)
-    if p.returncode != 0:
-        raise RuntimeError("Devre derlenemedi: " + (p.stderr or p.stdout)[-800:])
-    return name
-
-def ensure_single_host_certs(n):
-    """Yalnızca tek makineli execute-sum içindir. Çok makineli /party modunda her kurum kendi anahtarını üretir."""
-    data = os.path.join(MPSPDZ_HOME, "Player-Data")
-    os.makedirs(data, exist_ok=True)
-    made = False
-    for i in range(n):
-        if not os.path.isfile(os.path.join(data, "P%d.pem" % i)):
-            subprocess.run(["openssl", "req", "-newkey", "rsa", "-nodes", "-x509", "-out", os.path.join(data, "P%d.pem" % i),
-                            "-keyout", os.path.join(data, "P%d.key" % i), "-subj", "/CN=P%d" % i],
-                           check=True, capture_output=True, timeout=60)
-            made = True
-    if made:
-        subprocess.run(["openssl", "rehash", data], check=True, capture_output=True, timeout=30)
-
 def parse_result(text):
     for line in text.splitlines():
         if RESULT_TAG in line:
             return int(line.split(RESULT_TAG, 1)[1].strip())
     return None
-
-def run_one_party(binary, protocol, pid, n, corrupt, value, base_port, name):
-    with tempfile.TemporaryDirectory(prefix="mpc-job-") as job_dir:
-        # Eşzamanlı işler birbirinin girdisini ezmesin; ham değer iş bitince silinsin.
-        input_prefix = os.path.join(job_dir, "Input")
-        with open("%s-P%d-0" % (input_prefix, pid), "w") as fh:
-            fh.write("%d\n" % value)
-        cmd = [binary, "-N", str(n), "-p", str(pid), "-pn", str(base_port), "-IF", input_prefix]
-        if not is_ring_protocol(protocol):
-            cmd += ["-T", str(corrupt), "-P", str(DEFAULT_PRIME)]
-        cmd += ["-h", "localhost"]
-        p = subprocess.run(cmd + [name], cwd=MPSPDZ_HOME, capture_output=True, text=True, timeout=120)
-    if p.returncode != 0:
-        raise RuntimeError("party %d hata: %s" % (pid, (p.stderr or p.stdout)[-600:]))
-    return parse_result(p.stdout + "\n" + p.stderr)
-
-def run_all_parties(binary, protocol, values, corrupt):
-    import random
-    from concurrent.futures import ThreadPoolExecutor
-    n = len(values)
-    name = ensure_compiled(n, protocol)
-    ensure_single_host_certs(n)
-    port = random.randint(20000, 40000)
-    with ThreadPoolExecutor(max_workers=n) as ex:
-        futs = [ex.submit(run_one_party, binary, protocol, i, n, corrupt, values[i], port, name) for i in range(n)]
-        outs = [f.result() for f in futs]
-    res = next((o for o in outs if o is not None), None)
-    if res is None:
-        raise RuntimeError("MP-SPDZ çıktısında sonuç satırı bulunamadı.")
-    return res, ""
 
 def job_data_dir(job_id):
     """Her iş kendi Player-Data klasöründe çalışır: anahtarlar ve girdiler işler arasında karışmaz.
@@ -278,178 +212,30 @@ def run_masked_party(binary, protocol, data, pid, n, corrupt, value, denominator
 
 class MpSpdzHandler(http.server.BaseHTTPRequestHandler):
 
-    def _set_headers(self, status=200):
-        self.send_response(status)
-        self.send_header('Content-Type', 'application/json; charset=utf-8')
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-        self.end_headers()
-
-    def do_OPTIONS(self):
-        self._set_headers(200)
-
     def do_GET(self):
-        parsed = urlparse(self.path)
-        if parsed.path == "/health" or parsed.path == "/":
-            self._set_headers(200)
-            res = {
-                "status": "UP",
-                "engine": "MP-SPDZ (Multi-Protocol SPDZ)",
-                "protocols": ["shamir (t-of-n)", "malicious-shamir", "semi2k", "mascot"],
-                "binariesAvailable": {k: find_binary(k) is not None for k in PROTO_BIN},
-                "activeCircuit": "verimarket_masked_sum_n<N> (dinamik)",
-                "primeModulus": str(DEFAULT_PRIME),
-                "timestamp": int(time.time())
-            }
-            self.wfile.write(json.dumps(res, indent=2).encode('utf-8'))
+        if urlparse(self.path).path in ("/health", "/"):
+            self._json(200, {"status": "UP", "engine": "MP-SPDZ",
+                             "binariesAvailable": {k: find_binary(k) is not None for k in PROTO_BIN}})
         else:
-            self._set_headers(404)
-            self.wfile.write(json.dumps({"error": "Endpoint not found"}).encode('utf-8'))
+            self._json(404, {"error": "Endpoint not found"})
 
     def do_POST(self):
-        parsed = urlparse(self.path)
+        path = urlparse(self.path).path
         content_len = int(self.headers.get('Content-Length', 0))
-        post_data = self.rfile.read(content_len).decode('utf-8') if content_len > 0 else "{}"
         try:
-            body = json.loads(post_data)
-        except Exception:
-            body = {}
-
-        if parsed.path == "/api/v1/mpc/split":
-            self.handle_split(body)
-        elif parsed.path == "/api/v1/mpc/reconstruct":
-            self.handle_reconstruct(body)
-        elif parsed.path == "/api/v1/mpc/execute-sum":
-            self.handle_execute_sum(body)
-        elif parsed.path == "/api/v1/mpc/party-prepare":
+            body = json.loads(self.rfile.read(content_len).decode('utf-8')) if content_len > 0 else {}
+        except ValueError:
+            return self._json(400, {"error": "Geçersiz JSON"})
+        if path == "/api/v1/mpc/party-prepare":
             self.handle_party_prepare(body)
-        elif parsed.path == "/api/v1/mpc/party-run":
+        elif path == "/api/v1/mpc/party-run":
             self.handle_party_run(body)
-        elif parsed.path == "/api/v1/mpc/compile":
-            self.handle_compile(body)
         else:
-            self._set_headers(404)
-            self.wfile.write(json.dumps({"error": f"Endpoint not found: {parsed.path}"}).encode('utf-8'))
-
-    def handle_split(self, body):
-        secret = int(body.get("secret", 0))
-        threshold = int(body.get("threshold", 2))
-        num_parties = int(body.get("numParties", 3))
-        prime = int(body.get("prime", DEFAULT_PRIME))
-
-        if threshold <= 0 or threshold > num_parties:
-            self._set_headers(400)
-            self.wfile.write(json.dumps({"error": "Geçersiz eşik değeri"}).encode('utf-8'))
-            return
-
-        import secrets
-        coeffs = [secret] + [secrets.randbelow(prime - 1) + 1 for _ in range(threshold - 1)]
-
-        shares = []
-        for x in range(1, num_parties + 1):
-            y = 0
-            for coeff in reversed(coeffs):
-                y = (y * x + coeff) % prime
-            shares.append({"partyId": x, "shareValue": str(y)})
-
-        self._set_headers(200)
-        res = {
-            "engine": "MP-SPDZ",
-            "protocol": "Shamir Secret Sharing (SSS)",
-            "threshold": threshold,
-            "totalParties": num_parties,
-            "shares": shares,
-            "primeModulus": str(prime)
-        }
-        self.wfile.write(json.dumps(res).encode('utf-8'))
-
-    def handle_reconstruct(self, body):
-        shares_in = body.get("shares", [])
-        threshold = int(body.get("threshold", len(shares_in)))
-        prime = int(body.get("prime", DEFAULT_PRIME))
-
-        if len(shares_in) < threshold:
-            self._set_headers(400)
-            self.wfile.write(json.dumps({"error": f"En az {threshold} pay gereklidir."}).encode('utf-8'))
-            return
-
-        active_shares = shares_in[:threshold]
-        secret = 0
-
-        for i, s_i in enumerate(active_shares):
-            xi = int(s_i["partyId"])
-            yi = int(s_i["shareValue"])
-
-            num = 1
-            den = 1
-
-            for j, s_j in enumerate(active_shares):
-                if i == j:
-                    continue
-                xj = int(s_j["partyId"])
-                num = (num * (prime - xj)) % prime
-                den = (den * (xi - xj)) % prime
-
-            den_inv = pow(den, prime - 2, prime)
-            li = (num * den_inv) % prime
-            secret = (secret + yi * li) % prime
-
-        self._set_headers(200)
-        res = {
-            "engine": "MP-SPDZ",
-            "protocol": "Shamir Lagrange Interpolation",
-            "reconstructedSecret": str(secret),
-            "sharesUsed": len(active_shares),
-            "threshold": threshold
-        }
-        self.wfile.write(json.dumps(res).encode('utf-8'))
-
-    def handle_execute_sum(self, body):
-        """GERÇEK MP-SPDZ yürütmesi. Eski sürüm sonucu Python'da sum() ile hesaplayıp 'MPC tamamlandı' diyordu (sahte).
-        Artık: .mpc devresi derlenir, her taraf için ayrı bir *-party.x süreci başlatılır ve sonuç protokolden okunur.
-        MP-SPDZ ikilileri yoksa 501 döner; ASLA sahte sonuç üretilmez.
-
-        NOT: Bu uç nokta tüm tarafları TEK makinede çalıştırır (demo/test). Girdileri bu servis görür.
-        Üretimde her kurum kendi makinesinde /api/v1/mpc/party-prepare ve /party-run ile yalnızca KENDİ tarafını çalıştırmalıdır."""
-        start_time = time.time()
-        inputs = body.get("inputs", {})
-        parties = list(inputs.keys())
-        n = len(parties)
-        prime = int(body.get("prime", DEFAULT_PRIME))
-        if prime != DEFAULT_PRIME:
-            return self._json(400, {"error": "Yalnızca p=2^61-1 asal alanı desteklenir."})
-        protocol = body.get("protocol", "semi2k" if n == 2 else "shamir")
-        if n < 2 or (n < 3 and not is_ring_protocol(protocol)):
-            return self._json(400, {"error": "Shamir en az 3, semi2k en az 2 taraf gerektirir."})
-        threshold = int(body.get("threshold", (n - 1) // 2 + 1))
-        corrupt = 0
-        if not is_ring_protocol(protocol):
-            try:
-                corrupt = corruption_bound(threshold, n)
-            except ValueError as e:
-                return self._json(400, {"error": str(e)})
-        binary = find_binary(protocol)
-        if binary is None:
-            return self._json(501, {"success": False, "error": "MP-SPDZ ikilileri bulunamadı. "
-                "'make shamir-party.x' ile derleyin veya MP_SPDZ_HOME ayarlayın. Sahte sonuç üretilmez."})
-        try:
-            vals = [int(inputs[k]) for k in parties]
-            if any(v < 0 or v >= DEFAULT_PRIME for v in vals):
-                return self._json(400, {"error": "Girdiler 0 <= v < 2^61-1 aralığında olmalı."})
-            result, log_tail = run_all_parties(binary, protocol, vals, corrupt)
-        except Exception as e:
-            return self._json(500, {"success": False, "error": str(e)})
-        self._json(200, {
-            "success": True, "engine": "MP-SPDZ", "circuit": ("verimarket_sum_r64_n%d" if is_ring_protocol(protocol) else "verimarket_sum_n%d") % n,
-            "protocol": os.path.basename(binary), "totalParties": n, "threshold": threshold,
-            "reconstructedTotal": str(result), "executionTimeMs": int((time.time() - start_time) * 1000),
-            "executedBy": "real-mp-spdz-processes", "singleHostDemo": True,
-        })
+            self._json(404, {"error": "Endpoint not found"})
 
     def handle_party_prepare(self, body):
-        """Üretim modu, adım 1: bu kurumun iş anahtarını üretir ve devreyi derler. Yalnızca sertifika dışarı çıkar."""
-        protocol = body.get("protocol", "shamir")
+        """Adım 1: bu kurumun iş anahtarını üretir ve devreyi derler. Yalnızca sertifika dışarı çıkar."""
+        protocol = body.get("protocol")
         if find_binary(protocol) is None:
             return self._json(501, {"success": False, "error": "MP-SPDZ ikilileri bulunamadı."})
         try:
@@ -466,9 +252,9 @@ class MpSpdzHandler(http.server.BaseHTTPRequestHandler):
             self._json(500, {"success": False, "error": str(e)})
 
     def handle_party_run(self, body):
-        """Üretim modu, adım 2: SADECE bu tarafı çalıştırır. Girdi ve maske bu makineden çıkmaz.
+        """Adım 2: SADECE bu tarafı çalıştırır. Girdi ve maske bu makineden çıkmaz.
         Açılan değer toplam + tüm maskelerdir; gerçek toplamı yalnızca maskeleri çözebilen tüketici bulur."""
-        protocol = body.get("protocol", "shamir")
+        protocol = body.get("protocol")
         binary = find_binary(protocol)
         if binary is None:
             return self._json(501, {"success": False, "error": "MP-SPDZ ikilileri bulunamadı."})
@@ -498,24 +284,10 @@ class MpSpdzHandler(http.server.BaseHTTPRequestHandler):
             shutil.rmtree(os.path.dirname(data), ignore_errors=True)
 
     def _json(self, status, obj):
-        self._set_headers(status)
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.end_headers()
         self.wfile.write(json.dumps(obj).encode('utf-8'))
-
-    def handle_compile(self, body):
-        circuit = body.get("circuit", "verimarket_mpc")
-        compile_py = os.path.join(BASE_DIR, "compile.py")
-        cmd = [sys.executable, compile_py, circuit]
-        try:
-            p = subprocess.run(cmd, cwd=BASE_DIR, capture_output=True, text=True, timeout=30)
-            self._set_headers(200 if p.returncode == 0 else 500)
-            self.wfile.write(json.dumps({
-                "success": p.returncode == 0,
-                "stdout": p.stdout,
-                "stderr": p.stderr
-            }).encode('utf-8'))
-        except Exception as e:
-            self._set_headers(500)
-            self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
 
 def main():
     # Taraflar birbirini bekler; tek iş parçacıklı sunucu sağlık kontrolünü ve eşzamanlı işleri kilitlerdi.

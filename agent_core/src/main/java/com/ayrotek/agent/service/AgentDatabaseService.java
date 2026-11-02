@@ -25,11 +25,11 @@ public class AgentDatabaseService {
     @Value("${agent.db.url:${SPRING_DATASOURCE_URL:}}")
     private String dbUrl;
 
-    @Value("${agent.db.username:${SPRING_DATASOURCE_USERNAME:verimarket}}")
-    private String dbUsername = "verimarket";
+    @Value("${agent.db.username:${SPRING_DATASOURCE_USERNAME:}}")
+    private String dbUsername;
 
-    @Value("${agent.db.password:${SPRING_DATASOURCE_PASSWORD:verimarket_password}}")
-    private String dbPassword = "verimarket_password";
+    @Value("${agent.db.password:${SPRING_DATASOURCE_PASSWORD:}}")
+    private String dbPassword;
 
     public boolean isDbConnected() {
         return dbUrl != null && !dbUrl.isBlank();
@@ -125,68 +125,5 @@ public class AgentDatabaseService {
             }
         }
         return columns;
-    }
-
-    /**
-     * Kurumun yerel PostgreSQL veritabanındaki tabloları ve şemayı listeler.
-     * Ham veriler dışarı sızmaz, sadece tablo adları, kolonlar ve veri tipleri arayüze sunulur.
-     */
-    public Map<String, Object> getLocalDatabaseOverview(String institutionId, String institutionName, int serverPort) {
-        Map<String, Object> overview = new LinkedHashMap<>();
-        overview.put("institutionId", institutionId);
-        overview.put("institutionName", institutionName);
-        overview.put("dbUrl", dbUrl);
-        overview.put("dbConnected", isDbConnected());
-        overview.put("serverPort", serverPort);
-
-        List<Map<String, Object>> tables = new ArrayList<>();
-        if (isDbConnected()) {
-            try (Connection conn = DriverManager.getConnection(dbUrl, dbUsername, dbPassword)) {
-                DatabaseMetaData meta = conn.getMetaData();
-                try (ResultSet rs = meta.getTables(null, "public", "%", new String[]{"TABLE", "VIEW"})) {
-                    while (rs.next()) {
-                        String tableName = rs.getString("TABLE_NAME");
-                        if ("flyway_schema_history".equalsIgnoreCase(tableName)) continue;
-
-                        List<Map<String, Object>> columns = new ArrayList<>();
-                        try (ResultSet colRs = meta.getColumns(null, "public", tableName, "%")) {
-                            while (colRs.next()) {
-                                String colName = colRs.getString("COLUMN_NAME");
-                                String typeName = colRs.getString("TYPE_NAME");
-                                int colSize = colRs.getInt("COLUMN_SIZE");
-                                boolean sensitive = (colName.contains("kar") || colName.contains("gelir") || colName.contains("gider")
-                                        || colName.contains("tutar") || colName.contains("bakiye") || colName.contains("ciro")
-                                        || colName.contains("maas") || colName.contains("limit") || colName.contains("skor"));
-                                columns.add(Map.of(
-                                        "name", colName,
-                                        "type", typeName,
-                                        "size", colSize,
-                                        "sensitiveCandidate", sensitive
-                                    ));
-                            }
-                        }
-
-                        long rowCount = 0L;
-                        try (Statement stmt = conn.createStatement();
-                             ResultSet countRs = stmt.executeQuery("SELECT COUNT(*) FROM " + tableName)) {
-                            if (countRs.next()) {
-                                rowCount = countRs.getLong(1);
-                            }
-                        } catch (Exception ignored) {}
-
-                        tables.add(Map.of(
-                                "tableName", tableName,
-                                "rowCount", rowCount,
-                                "columns", columns
-                        ));
-                    }
-                }
-            } catch (Exception e) {
-                log.warn("[AgentDatabase - {}] Yerel veritabanı şeması listelenirken hata: {}", institutionId, e.getMessage());
-                overview.put("error", e.getMessage());
-            }
-        }
-        overview.put("tables", tables);
-        return overview;
     }
 }

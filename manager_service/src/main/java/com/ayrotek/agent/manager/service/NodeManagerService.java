@@ -34,10 +34,10 @@ public class NodeManagerService {
 
     private static final Logger log = LoggerFactory.getLogger(NodeManagerService.class);
 
-    @Value("${node.id:Banka_A}")
+    @Value("${node.id}")
     private String nodeId;
 
-    @Value("${node.name:Banka A Kurum İçi Yönetici}")
+    @Value("${node.name}")
     private String nodeName;
 
     @Value("${node.agent-url:http://localhost:8083}")

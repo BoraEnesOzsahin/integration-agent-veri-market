@@ -30,10 +30,10 @@ public class DynamicSchemaService {
 
     private static final Logger log = LoggerFactory.getLogger(DynamicSchemaService.class);
 
-    @Value("${node.id:Banka_A}")
+    @Value("${node.id}")
     private String nodeId;
 
-    @Value("${node.name:Banka A Kurum İçi Yönetici}")
+    @Value("${node.name}")
     private String nodeName;
 
     @Value("${node.anoncreds-url:http://localhost:3000}")

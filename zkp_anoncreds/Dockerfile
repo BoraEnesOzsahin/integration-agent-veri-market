@@ -11,6 +11,7 @@ RUN npm install
 # Kaynak kodları ve konfigürasyonları kopyala
 COPY tsconfig.json schema.sql ./
 COPY src/ ./src/
+COPY circuits/build/ ./circuits/build/
 COPY server.ts ./
 
 EXPOSE 3000

@@ -33,7 +33,7 @@ public class NodeIdentity {
     private KeyPair keyPair;
 
     public NodeIdentity(@Value("${node.signing-key-file:}") String configuredFile,
-                        @Value("${node.id:Banka_A}") String nodeId) {
+                        @Value("${node.id}") String nodeId) {
         this.file = Path.of(!configuredFile.isBlank() ? configuredFile
                 : System.getProperty("user.home") + "/.verimarket/agent-" + nodeId.toLowerCase() + "-ed25519.key");
     }

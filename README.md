@@ -21,32 +21,13 @@ Gerçek hayat enterprise mimarisinde hiçbir kurum ham verilerini dışarıya ve
 
 Bu projeyi dış/başka bir bilgisayara kopyaladıktan sonra:
 
-### Yöntem 1: Tek Tıkla Docker Compose (Önerilen)
-Dış bilgisayarda Docker Desktop açıkken, Coordinator sunucusunun IP adresini vererek başlatın:
-
-```powershell
-# Windows PowerShell (Kök dizinden veya bu dizinden):
-.\start-external-node.ps1 -CoordinatorIp "192.168.1.100" -NodeId "Banka_Harici_1" -NodeName "Harici Banka A.Ş."
-```
-
+### Docker Compose ile Başlatma
 ```bash
-# Linux / macOS:
-./start-external-agent.sh 192.168.1.100 8081 auto Banka_Harici_1 "Harici Banka A.Ş."
-```
-
-Bu komut:
-* Bilgisayarınızın yerel IP'sini (`MyIp`) otomatik tespit eder.
-* `.env` dosyasını yapılandırır.
-* `docker-compose.agent-node.yml` dosyasını çalıştırarak 4 bileşeni de (`Postgres`, `ZKP AnonCreds`, `Manager`, `Agent`) izole konteynerler olarak ayağa kaldırır.
-* Koordinatör sunucusuna (`http://192.168.1.100:8081`) otomatik kayıt atar.
-
-### Yöntem 2: Doğrudan `docker compose` ile Başlatma
-```bash
-# 1. .env.example dosyasını .env olarak kopyalayın ve Coordinator IP'sini düzenleyin:
+# 1. .env.example dosyasını .env olarak kopyalayın ve değerleri doldurun:
 cp .env.example .env
 
-# 2. Tam DMZ stack'i başlatın:
-docker compose -f docker-compose.agent-node.yml up -d
+# 2. Kurum düğümünü başlatın:
+docker compose -f docker-compose.agent-node.yml up -d --build
 ```
 
 ### Konteynerleri Kapatma:
