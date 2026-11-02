@@ -46,8 +46,10 @@ public class NodeManagerService {
     @Value("${node.manager-url:http://localhost:8093}")
     private String managerUrl;
 
-    @Value("${node.supported-datasets:bankalar,finans,kredi,consortium}")
-    private String supportedDatasets;
+    /** Ajanın paylaşım listesi (aynı dosya): koordinatöre yalnızca kurumun açtığı tablolar bildirilir. */
+    @Value("${node.exposure-policy-file:}")
+    private String exposurePolicyFile;
+    private String registeredDatasets;
 
     @Value("${node.anoncreds-url:http://localhost:3000}")
     private String anoncredsUrl;
@@ -81,7 +83,7 @@ public class NodeManagerService {
         log.info("[NodeManager] Hedef Coordinator: {}", coordinatorUrl);
         log.info("[NodeManager] Yönetilen Ajan URL: {}", agentUrl);
         log.info("[NodeManager] Yönetici Kendi URL: {}", managerUrl);
-        log.info("[NodeManager] Desteklenen Veri Setleri: {}", supportedDatasets);
+        log.info("[NodeManager] Paylaşılan tablolar: {}", supportedDatasets());
         log.info("[NodeManager] Yönetilen AnonCreds URL: {}", anoncredsUrl);
         log.info("[NodeManager] Kurum anahtarı (yönetici onayında karşılaştırın): {}", identity.publicKeyHex());
         registerWithCoordinator();
@@ -94,6 +96,7 @@ public class NodeManagerService {
             regBody.put("institutionName", nodeName);
             regBody.put("agentUrl", agentUrl);
             regBody.put("managerUrl", managerUrl);
+            String supportedDatasets = supportedDatasets();
             regBody.put("supportedDatasets", supportedDatasets);
             long timestamp = System.currentTimeMillis();
             regBody.put("publicKeyHex", identity.publicKeyHex());
@@ -112,6 +115,7 @@ public class NodeManagerService {
 
             if (resp.statusCode() == 200) {
                 isRegistered = true;
+                registeredDatasets = supportedDatasets;
                 JsonNode root = objectMapper.readTree(resp.body());
                 String status = root.path("approvalStatus").asText("UNKNOWN");
                 this.isApproved = "APPROVED".equalsIgnoreCase(status);
@@ -138,7 +142,8 @@ public class NodeManagerService {
         // Yerel servislerin durumunu kontrol et
         checkLocalServicesHealth();
 
-        if (!isRegistered) {
+        // Paylaşım listesi değiştiyse koordinatör yeni listeyi kayıtla öğrenir
+        if (!isRegistered || !supportedDatasets().equals(registeredDatasets)) {
             boolean success = registerWithCoordinator();
             if (!success) {
                 return;
@@ -212,7 +217,7 @@ public class NodeManagerService {
         map.put("nodeName", nodeName);
         map.put("agentUrl", agentUrl);
         map.put("managerUrl", managerUrl);
-        map.put("supportedDatasets", supportedDatasets);
+        map.put("supportedDatasets", supportedDatasets());
         map.put("anoncredsUrl", anoncredsUrl);
         map.put("coordinatorUrl", coordinatorUrl);
         map.put("isRegistered", isRegistered);
@@ -222,6 +227,24 @@ public class NodeManagerService {
         map.put("anoncredsHealthy", lastAnoncredsHealth);
         map.put("lastSuccessfulHeartbeat", lastSuccessfulHeartbeat != null ? lastSuccessfulHeartbeat.toString() : "YOK");
         return map;
+    }
+
+    /** Paylaşım listesindeki tablolar, virgülle ve sıralı. Dosya yoksa veya okunamazsa hiçbir tablo bildirilmez. */
+    String supportedDatasets() {
+        java.nio.file.Path file = java.nio.file.Path.of(exposurePolicyFile != null && !exposurePolicyFile.isBlank()
+                ? exposurePolicyFile
+                : System.getProperty("user.home") + "/.verimarket/exposure-policy-" + nodeId.toLowerCase() + ".json");
+        if (!java.nio.file.Files.exists(file)) {
+            return "";
+        }
+        try {
+            java.util.TreeSet<String> tables = new java.util.TreeSet<>();
+            objectMapper.readTree(file.toFile()).path("tables").fieldNames().forEachRemaining(tables::add);
+            return String.join(",", tables);
+        } catch (java.io.IOException e) {
+            log.warn("[NodeManager] Paylaşım listesi okunamadı ({}): {}", file, e.getMessage());
+            return "";
+        }
     }
 
     private String cleanUrl(String url) {

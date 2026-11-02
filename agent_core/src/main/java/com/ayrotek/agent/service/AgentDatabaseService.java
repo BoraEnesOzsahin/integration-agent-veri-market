@@ -14,8 +14,8 @@ import java.util.*;
  *
  * Sorumluluklar:
  * 1. Kurumun DMZ sınırları içerisindeki yerel PostgreSQL veritabanına bağlanma.
- * 2. Dinamik metrik sorguları ve ZKP predicate kontrolleri (ham veri asla kurum dışına çıkmaz).
- * 3. Şema ve tablo bilgilerini metadata üzerinden listeleme.
+ * 2. Yalnızca kurumun paylaşıma açtığı tablo ve sütunları okuma (ham veri asla kurum dışına çıkmaz).
+ * 3. Yerel panel için şema bilgisini metadata üzerinden listeleme.
  */
 @Service
 public class AgentDatabaseService {
@@ -31,99 +31,133 @@ public class AgentDatabaseService {
     @Value("${agent.db.password:${SPRING_DATASOURCE_PASSWORD:}}")
     private String dbPassword;
 
+    private final ExposurePolicyService policy;
+
+    public AgentDatabaseService(ExposurePolicyService policy) {
+        this.policy = policy;
+    }
+
     public boolean isDbConnected() {
         return dbUrl != null && !dbUrl.isBlank();
     }
 
-    public String getDbUrl() {
-        return dbUrl;
-    }
-
     /**
-     * Kurumun izole PostgreSQL veritabanından dinamik hedef metriği sorgular.
+     * Paylaşıma açık bir sütunun tablodaki toplamı. Açık değilse veritabanına hiç gidilmez.
      * Eğer hedef kolon veya tablo veritabanında yoksa SQLException fırlatılır.
      */
     public BigInteger queryLocalDatabaseMetric(String datasetName, String targetMetric, String institutionId) throws SQLException {
         if (!isDbConnected()) {
             return null;
         }
-
-        String table = (datasetName != null && !datasetName.isBlank()) ? datasetName.trim().toLowerCase() : "gelir_gider";
-        String column = (targetMetric != null && !targetMetric.isBlank()) ? targetMetric.trim().toLowerCase() : "kar";
-
-        // SQL Injection ve format denetimi: Sadece harf, rakam ve altçizgi
-        if (!table.matches("^[a-zA-Z0-9_]+$") || !column.matches("^[a-zA-Z0-9_]+$")) {
-            throw new IllegalArgumentException("Geçersiz tablo veya kolon adı formatı: " + table + "." + column);
-        }
+        String table = ExposurePolicyService.normalize(datasetName);
+        String column = ExposurePolicyService.normalize(targetMetric);
+        policy.requireAllowed(table, column);
 
         String sql = "SELECT COALESCE(SUM(" + column + "), 0) FROM " + table;
-        log.info("[AgentDatabase - {}] Yerel PostgreSQL sorgusu yürütülüyor: {} (DB: {})", institutionId, sql, dbUrl);
+        log.info("[AgentDatabase - {}] Yerel PostgreSQL sorgusu yürütülüyor: {}", institutionId, sql);
 
-        try (Connection conn = DriverManager.getConnection(dbUrl, dbUsername, dbPassword);
+        try (Connection conn = connect();
              Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
 
             if (rs.next()) {
-                long val = rs.getLong(1);
+                BigInteger val = rs.getBigDecimal(1).toBigInteger();
                 log.info("[AgentDatabase - {}] Yerel PostgreSQL sonucu alındı (DMZ içinde gizli tutuluyor)", institutionId);
-                return BigInteger.valueOf(val);
+                return val;
             }
             return BigInteger.ZERO;
         }
     }
 
-    /**
-     * ZKP koşullarında sorgulanan niteliğin (predicate attribute) yerel PostgreSQL'deki değerini denetler.
-     * Eğer kolon veritabanında mevcut değilse SQLException fırlatılır.
-     */
-    public Long queryPredicateAttribute(String datasetName, String attrName) throws SQLException {
-        if (!isDbConnected()) {
-            return null;
-        }
-
-        String table = (datasetName != null && !datasetName.isBlank()) ? datasetName.trim().toLowerCase() : "gelir_gider";
-        String column = (attrName != null && !attrName.isBlank()) ? attrName.trim().toLowerCase() : "kar";
-
-        if (!table.matches("^[a-zA-Z0-9_]+$") || !column.matches("^[a-zA-Z0-9_]+$")) {
-            return null;
-        }
-
-        // Koşul kurumun o sütundaki toplamı üzerinden değerlendirilir
-        String sql = "SELECT COALESCE(SUM(" + column + "), 0) FROM " + table;
-        try (Connection conn = DriverManager.getConnection(dbUrl, dbUsername, dbPassword);
-             Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery(sql)) {
-
-            if (rs.next()) {
-                return rs.getLong(1);
-            }
-            return 0L;
-        }
-    }
-
-    /** Tablo veya view'daki sayısal veri sütunları (sıralı). Kimlik sütunları ölçüm sayılmaz. */
+    /** Yayına girecek sütunlar: tablonun sayısal sütunlarından kurumun paylaşıma açtıkları (sıralı). */
     public List<String> listMetricColumns(String tableName) throws SQLException {
         if (!isDbConnected()) {
             return List.of();
         }
-        String table = tableName.trim().toLowerCase();
-        if (!table.matches("^[a-z0-9_]+$")) {
-            throw new IllegalArgumentException("Geçersiz tablo adı: " + table);
+        String table = ExposurePolicyService.normalize(tableName);
+        policy.requireAllowed(table, null);
+        List<String> allowed = policy.allowedColumns(table);
+        return numericColumns(table).stream().filter(allowed::contains).toList();
+    }
+
+    /** Yerel panel: public şemadaki tablo ve görünümler, sayısal sütunları ve satır sayılarıyla. Değer okunmaz. */
+    public List<Map<String, Object>> describeSchema() throws SQLException {
+        List<Map<String, Object>> out = new ArrayList<>();
+        if (!isDbConnected()) {
+            return out;
         }
+        try (Connection conn = connect()) {
+            List<String[]> tables = new ArrayList<>();
+            try (ResultSet rs = conn.getMetaData().getTables(null, "public", "%", new String[]{"TABLE", "VIEW", "MATERIALIZED VIEW"})) {
+                while (rs.next()) {
+                    tables.add(new String[]{rs.getString("TABLE_NAME"), rs.getString("TABLE_TYPE")});
+                }
+            }
+            for (String[] t : tables) {
+                String name = t[0];
+                if (!name.matches("^[a-z0-9_]+$")) {
+                    continue; // Tırnak gerektiren adlar paylaşılamaz
+                }
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("name", name);
+                item.put("type", t[1]);
+                item.put("numericColumns", numericColumns(conn, name));
+                item.put("otherColumns", otherColumns(conn, name));
+                try (Statement st = conn.createStatement(); ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM " + name)) {
+                    item.put("rowCount", rs.next() ? rs.getLong(1) : 0);
+                } catch (SQLException e) {
+                    item.put("rowCount", null);
+                    item.put("error", e.getMessage());
+                }
+                out.add(item);
+            }
+        }
+        out.sort(Comparator.comparing(m -> (String) m.get("name")));
+        return out;
+    }
+
+    /** Tablo veya view'daki sayısal veri sütunları (sıralı). Kimlik sütunları ölçüm sayılmaz. */
+    public List<String> numericColumns(String table) throws SQLException {
+        try (Connection conn = connect()) {
+            return numericColumns(conn, table);
+        }
+    }
+
+    private static List<String> numericColumns(Connection conn, String table) throws SQLException {
         List<String> columns = new ArrayList<>();
-        try (Connection conn = DriverManager.getConnection(dbUrl, dbUsername, dbPassword);
-             ResultSet rs = conn.getMetaData().getColumns(null, "public", table, "%")) {
+        try (ResultSet rs = conn.getMetaData().getColumns(null, "public", table, "%")) {
             while (rs.next()) {
                 String name = rs.getString("COLUMN_NAME");
-                boolean numeric = switch (rs.getInt("DATA_TYPE")) {
-                    case Types.SMALLINT, Types.INTEGER, Types.BIGINT, Types.NUMERIC, Types.DECIMAL, Types.REAL, Types.DOUBLE, Types.FLOAT -> true;
-                    default -> false;
-                };
-                if (numeric && !name.equalsIgnoreCase("id") && !name.toLowerCase().endsWith("_id")) {
+                if (isNumeric(rs.getInt("DATA_TYPE")) && name.matches("^[a-z0-9_]+$")
+                        && !name.equals("id") && !name.endsWith("_id")) {
                     columns.add(name);
                 }
             }
         }
         return columns;
+    }
+
+    private static List<String> otherColumns(Connection conn, String table) throws SQLException {
+        List<String> columns = new ArrayList<>();
+        try (ResultSet rs = conn.getMetaData().getColumns(null, "public", table, "%")) {
+            while (rs.next()) {
+                String name = rs.getString("COLUMN_NAME");
+                if (!isNumeric(rs.getInt("DATA_TYPE")) || name.equals("id") || name.endsWith("_id")) {
+                    columns.add(name);
+                }
+            }
+        }
+        return columns;
+    }
+
+    private static boolean isNumeric(int type) {
+        return switch (type) {
+            case Types.SMALLINT, Types.INTEGER, Types.BIGINT, Types.NUMERIC, Types.DECIMAL, Types.REAL, Types.DOUBLE, Types.FLOAT -> true;
+            default -> false;
+        };
+    }
+
+    private Connection connect() throws SQLException {
+        return DriverManager.getConnection(dbUrl, dbUsername, dbPassword);
     }
 }

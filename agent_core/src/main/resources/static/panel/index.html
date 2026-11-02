@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kurum Ajanı Paneli</title>
+  <style>
+    :root {
+      --bg: #f6f7f9; --card: #fff; --text: #1d2330; --muted: #5d6676; --faint: #8b93a1; --line: #e3e6eb;
+      --accent: #2456d6; --ok: #1f8a4c; --ok-bg: #e7f5ec; --bad: #b42318; --bad-bg: #fdecea; --warn: #9a6700; --warn-bg: #fff6dd;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #12151b; --card: #1a1e26; --text: #e6e9ef; --muted: #a3abb9; --faint: #7a8291; --line: #2b313c;
+        --accent: #7aa2ff; --ok: #5fd08f; --ok-bg: #16301f; --bad: #ff8a80; --bad-bg: #3a1a18; --warn: #f2c14e; --warn-bg: #352b10;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    main { max-width: 1040px; margin: 0 auto; padding: 24px 16px 64px; }
+    header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 20px; }
+    h1 { font-size: 20px; margin: 0; font-weight: 600; }
+    h2 { font-size: 15px; margin: 0 0 4px; font-weight: 600; }
+    .muted { color: var(--muted); } .faint { color: var(--faint); } .small { font-size: 12px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; word-break: break-all; }
+    section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin-bottom: 16px; }
+    .status { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-top: 12px; }
+    .stat { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+    .stat .label { font-size: 12px; color: var(--muted); }
+    .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 500; }
+    .ok { color: var(--ok); background: var(--ok-bg); } .bad { color: var(--bad); background: var(--bad-bg); } .warn { color: var(--warn); background: var(--warn-bg); }
+    .table-card { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-top: 10px; }
+    .table-card.shared { border-color: var(--accent); }
+    .table-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; align-items: center; }
+    .columns { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 10px; }
+    label.col { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+    .bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-top: 14px; }
+    button { font: inherit; border-radius: 8px; padding: 7px 14px; border: 1px solid var(--line); background: var(--card); color: var(--text); cursor: pointer; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    button:disabled { opacity: .5; cursor: default; }
+    table.log { width: 100%; border-collapse: collapse; font-size: 13px; }
+    table.log th, table.log td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    table.log th { font-weight: 500; color: var(--muted); font-size: 12px; }
+    .scroll { overflow-x: auto; }
+    .notice { padding: 10px 12px; border-radius: 8px; margin-top: 10px; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1 id="title">Kurum Ajanı Paneli</h1>
+      <div class="muted small">Bu sayfa yalnızca bu makineden açılır. Ham veri bu makineden çıkmaz.</div>
+    </div>
+    <div class="small faint" id="updated"></div>
+  </header>
+
+  <section>
+    <h2>Durum</h2>
+    <div class="status" id="status"><div class="faint">Yükleniyor…</div></div>
+  </section>
+
+  <section>
+    <h2>Paylaşılan veriler</h2>
+    <div class="muted small">Yalnızca işaretlediğiniz sütunlar yayınlanabilir ve sorgulanabilir. İşaretsiz tablo ve sütunlar için gelen her istek, veritabanına dokunulmadan reddedilir. Ham değer hiçbir zaman paylaşılmaz; dışarı yalnızca taahhüt, kanıt ve şifreli sonuç çıkar.</div>
+    <div id="tables"></div>
+    <div class="bar">
+      <div class="small muted" id="dirty"></div>
+      <div><button id="reset" disabled>Geri al</button> <button id="save" class="primary" disabled>Kaydet</button></div>
+    </div>
+    <div id="save-result"></div>
+  </section>
+
+  <section>
+    <h2>Son istekler</h2>
+    <div class="muted small">Bu ajana gelen yayın ve sorgu istekleri. Değerler ve sonuçlar kaydedilmez.</div>
+    <div class="scroll"><table class="log"><thead><tr><th>Zaman</th><th>Tür</th><th>Tablo.sütun</th><th>İşlem</th><th>Sonuç</th></tr></thead><tbody id="activity"></tbody></table></div>
+  </section>
+
+  <section>
+    <h2>Kurum anahtarı</h2>
+    <div class="muted small">Platform yöneticisi kurumunuzu onaylarken bu anahtarı karşılaştırır.</div>
+    <div class="mono" id="key"></div>
+    <div class="small faint" style="margin-top:8px">Paylaşım listesi: <span class="mono" id="policy-file"></span></div>
+  </section>
+</main>
+<script src="panel.js"></script>
+</body>
+</html>

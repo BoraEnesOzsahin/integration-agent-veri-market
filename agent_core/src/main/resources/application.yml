@@ -10,6 +10,14 @@ agent:
   institution-name: ${AGENT_NAME}
   coordinator:
     public-key: ${AGENT_COORDINATOR_PUBLIC_KEY}
+  # Yerel panel: yalnızca 127.0.0.1'de açılır. 0 paneli kapatır.
+  panel:
+    port: ${AGENT_PANEL_PORT:8094}
+  # Kurumun paylaşıma açtığı tablo ve sütunlar. Boşsa kullanıcı klasöründe tutulur.
+  policy:
+    file: ${AGENT_EXPOSURE_POLICY_FILE:}
+  manager:
+    local-url: ${AGENT_MANAGER_LOCAL_URL:http://127.0.0.1:8093}
 
 anoncreds:
   service:

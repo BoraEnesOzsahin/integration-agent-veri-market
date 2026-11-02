@@ -1,5 +1,6 @@
 package com.ayrotek.agent.controller;
 
+import com.ayrotek.agent.service.AgentActivityLog;
 import com.ayrotek.agent.service.IntegrationAgentService;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.springframework.http.ResponseEntity;
@@ -16,9 +17,24 @@ import java.util.Map;
 public class IntegrationAgentController {
 
     private final IntegrationAgentService agentService;
+    private final AgentActivityLog activity;
 
-    public IntegrationAgentController(IntegrationAgentService agentService) {
+    public IntegrationAgentController(IntegrationAgentService agentService, AgentActivityLog activity) {
         this.agentService = agentService;
+        this.activity = activity;
+    }
+
+    /** İsteği çalıştırır ve sonucunu yerel paneldeki kayda yazar. */
+    private <T> T logged(String kind, String jobId, String table, String column, String operation, java.util.function.Supplier<T> call) {
+        try {
+            T result = call.get();
+            activity.record(kind, jobId, table, column, operation, true, null);
+            return result;
+        } catch (RuntimeException e) {
+            String message = e instanceof org.springframework.web.server.ResponseStatusException rse && rse.getReason() != null ? rse.getReason() : e.getMessage();
+            activity.record(kind, jobId, table, column, operation, false, message);
+            throw e;
+        }
     }
 
     @GetMapping("/status")
@@ -35,7 +51,14 @@ public class IntegrationAgentController {
     /** Round 1: yerel değeri okur, ZKP üretir, maskeyi seçer ve iş sertifikasını döner. Ham değer ve maske ajandan çıkmaz. */
     @PostMapping("/mpc/engine/prepare")
     public ResponseEntity<AgentEnginePrepareResponse> enginePrepare(@RequestBody AgentEnginePrepareRequest request) {
-        return ResponseEntity.ok(agentService.enginePrepare(request));
+        AgentEngineInit init = request == null ? null : request.init();
+        return ResponseEntity.ok(logged("MPC", init == null ? null : init.jobId(), init == null ? null : init.datasetName(),
+                init == null ? null : init.targetMetric(), init == null ? null : operationLabel(init.operation(), init.outputMode()),
+                () -> agentService.enginePrepare(request)));
+    }
+
+    private static String operationLabel(String operation, String outputMode) {
+        return (operation == null || operation.isBlank() ? "SUM" : operation) + ("THRESHOLD".equalsIgnoreCase(outputMode) ? " / eşik" : "");
     }
 
     /** Round 2: imzalı bildirimi doğrular, MP-SPDZ tarafını çalıştırır ve maskeyi tüketici anahtarıyla şifreler. */
@@ -53,13 +76,15 @@ public class IntegrationAgentController {
     /** Tek kurumlu sorgu: koordinatör imzası zorunludur. */
     @PostMapping("/pipeline/process-request")
     public ResponseEntity<AgentPipelineResponse> processRequest(@RequestBody AgentPipelineRequest request) {
-        return ResponseEntity.ok(agentService.executePipeline(request));
+        return ResponseEntity.ok(logged("SORGU", request.jobId(), request.datasetName(), request.targetMetric(),
+                operationLabel(request.operation(), request.outputMode()), () -> agentService.executePipeline(request)));
     }
 
     /** Veri seti belgesi: değerler yalnızca Pedersen taahhüdü olarak çıkar. */
     @PostMapping("/chamber/mint-vc")
     public ResponseEntity<Map<String, Object>> mintChamberVc(@RequestBody MintVcRequest request) {
-        return ResponseEntity.ok(agentService.mintChamberVc(request.chamberId(), request.category(), request.tableName()));
+        return ResponseEntity.ok(logged("YAYIN", request.chamberId(), request.tableName(), null, null,
+                () -> agentService.mintChamberVc(request.chamberId(), request.category(), request.tableName())));
     }
 
     @ExceptionHandler(org.springframework.web.server.ResponseStatusException.class)

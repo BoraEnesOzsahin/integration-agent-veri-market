@@ -1,5 +1,7 @@
 server:
   port: ${SERVER_PORT:8093}
+  # Koordinatör yöneticiye bağlanmaz; kayıt ve nabız makineden dışarı gider. Bu yüzden dışarıya açılmaz.
+  address: ${SERVER_ADDRESS:127.0.0.1}
 
 spring:
   application:
@@ -9,8 +11,10 @@ node:
   id: ${NODE_ID}
   name: ${NODE_NAME}
   agent-url: ${AGENT_PUBLIC_URL:http://localhost:8083}
-  manager-url: ${MANAGER_PUBLIC_URL:http://localhost:8093}
-  supported-datasets: ${SUPPORTED_DATASETS:bankalar,finans,kredi,consortium}
+  # Eski sürümlerle uyum için kayıtta boş gönderilir
+  manager-url: ${MANAGER_PUBLIC_URL:}
+  # Ajanın paylaşım listesi: koordinatöre bildirilen tablolar buradan okunur
+  exposure-policy-file: ${NODE_EXPOSURE_POLICY_FILE:}
   anoncreds-url: ${ANONCREDS_SERVICE_URL:http://localhost:3000}
   coordinator-url: ${COORDINATOR_URL:http://localhost:8081}
   # Ajanın imza anahtarıyla aynı dosya: kurumun tek kimliği

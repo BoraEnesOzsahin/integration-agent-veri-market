@@ -44,6 +44,17 @@ docker logs agent-node-manager | grep "Kurum anahtarı"
 
 Bu değeri platform yöneticisine güvenli bir kanaldan iletin. Yönetici, Yönetim sayfasındaki anahtarla karşılaştırıp onaylar. Anahtar veya ajan adresi değişirse yeniden onay gerekir. Anahtarı kaybederseniz yönetici kimliği sıfırlamalıdır.
 
+### Yerel Panel ve Paylaşılan Tablolar
+Ajan hiçbir tabloyu kendiliğinden paylaşmaz. Hangi tablo ve sütunların yayınlanıp sorgulanabileceğini kurum yöneticisi yerel panelden seçer; seçilmeyen tablo veya sütun için gelen istek, veritabanına dokunulmadan reddedilir.
+
+Panel yalnızca makinenin kendisinde (`127.0.0.1:8094`) açılır, dışarıdan erişilemez. Başka bir bilgisayardan SSH tüneliyle açın:
+
+```bash
+ssh -L 8094:127.0.0.1:8094 <kullanıcı>@<makine>
+```
+
+Ardından tarayıcıda `http://localhost:8094` adresini açın. Panelde koordinatör bağlantısı, onay durumu, kurum anahtarı ve ajana gelen son istekler de görünür. Seçim `/data/exposure-policy.json` dosyasında saklanır ve kaydedildiği anda uygulanır; koordinatöre yalnızca tablo adları bildirilir.
+
 ---
 
 ## 📊 Servis Portları ve Güvenlik Sınırı
@@ -53,4 +64,5 @@ Bu değeri platform yöneticisine güvenli bir kanaldan iletin. Yönetici, Yöne
 | **PostgreSQL** | `5432` | Kurum İçi Finans Veri Tabanı | ❌ Hayır (Yalnızca Kurum İçi) |
 | **AnonCreds ZKP**| `3000` | Sıfır Bilgi İspatı Motoru | ❌ Hayır (Yalnızca Kurum İçi) |
 | **Agent Core** | `8083` | Shamir MPC + Şifreleme | ✅ Evet (Coordinator erişebilmeli) |
-| **Manager** | `8093` | Kayıt ve Canlılık Takibi | ✅ Evet (Coordinator erişebilmeli) |
+| **Manager** | `8093` | Kayıt ve Canlılık Takibi (bağlantıyı makine başlatır) | ❌ Hayır (yalnızca 127.0.0.1) |
+| **Yerel Panel** | `8094` | Paylaşılan tablolar, durum, işlem kaydı | ❌ Hayır (yalnızca 127.0.0.1) |
