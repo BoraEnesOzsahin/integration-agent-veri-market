@@ -55,6 +55,9 @@ ssh -L 8094:127.0.0.1:8094 <kullanıcı>@<makine>
 
 Ardından tarayıcıda `http://localhost:8094` adresini açın. Panelde koordinatör bağlantısı, onay durumu, kurum anahtarı ve ajana gelen son istekler de görünür. Seçim `/data/exposure-policy.json` dosyasında saklanır ve kaydedildiği anda uygulanır; koordinatöre yalnızca tablo adları bildirilir.
 
+### Yeniden Yayın ve Sürümler
+Bir sütunun değeri son yayından beri değişmediyse ajan aynı taahhüdü yeniden verir ve platform yeni sürüm açmaz, yalnızca son doğrulama zamanını günceller. Değer veya sütun listesi değişince yeni tuzla yeni taahhüt ve yeni sürüm oluşur. Bu yüzden platform bir değerin değişip değişmediğini görür; değerin kendisini göremez.
+
 ---
 
 ## 📊 Servis Portları ve Güvenlik Sınırı

@@ -122,9 +122,15 @@ export class InstitutionController {
       credential: held.credentialJson,
     })
 
-    // Her sütun için yeni tuzla taahhüt: yayınlanan yalnızca taahhüttür
+    // Değer değiştiyse yeni tuzla taahhüt; değişmediyse önceki taahhüt aynen kalır ve platform yeni sürüm açmaz.
+    // Yayınlanan yalnızca taahhüttür: aynı taahhüt yalnızca "değer değişmedi" bilgisini verir, değeri vermez.
     const commitments: Record<string, string> = {}
     for (const [metric, value] of Object.entries(metrics ?? {})) {
+      const stored = await getPredicateCommitment(institutionId, tableName, metric)
+      if (stored && stored.value === String(value)) {
+        commitments[metric] = stored.commitment
+        continue
+      }
       const committed = await this.predicateProofService.commit(String(value))
       await savePredicateCommitment(institutionId, tableName, metric, committed)
       commitments[metric] = committed.commitment
