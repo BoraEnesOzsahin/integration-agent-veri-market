@@ -1,0 +1,9 @@
+# Depoda satır sonları LF; Windows betikleri CRLF. İkili dosyalara dokunulmaz.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.zkey binary
+*.wasm binary
+*.ptau binary
+*.jar binary
