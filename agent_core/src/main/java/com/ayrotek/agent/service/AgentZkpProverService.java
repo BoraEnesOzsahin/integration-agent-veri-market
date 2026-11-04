@@ -114,13 +114,11 @@ public class AgentZkpProverService {
         if (response.status() == 404) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, institutionId + " bu veri setini henüz yayınlamadı.");
         }
-        if (response.status() == 422) {
-            log.warn("[AgentZkpProver] Kanıt üretilemedi: {}", response.body().path("error").asText());
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    institutionId + " verisi yayından sonra değişmiş. Kurumun veri setini yeniden yayınlaması gerekir.");
-        }
         if (response.status() != 200) {
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Kurumun ZKP motoru kanıt üretemedi.");
+            // Kimlik kanıtı değere bağlı değildir: hata veri değişikliği değil, belge veya motor hatasıdır
+            log.warn("[AgentZkpProver] Kimlik kanıtı üretilemedi ({}): {}", response.status(), response.body().path("error").asText());
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    institutionId + " kurumunun kimlik kanıtı üretilemedi. Ayrıntı kurumun ajan kaydında; veri setini yeniden yayınlamak belgeyi yeniler.");
         }
         return objectMapper.convertValue(response.body().path("artifacts"), new TypeReference<>() {});
     }
@@ -168,13 +166,15 @@ public class AgentZkpProverService {
         if (response.status() == 404) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, institutionId + " bu sütunu henüz yayınlamadı. Veri setinin yeniden yayınlanması gerekir.");
         }
-        if (response.status() == 422) {
-            log.warn("[AgentZkpProver] Koşul kanıtı üretilemedi: {}", response.body().path("code").asText());
+        if (response.status() == 422 && "VALUE_CHANGED".equals(response.body().path("code").asText())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     institutionId + " verisi yayından sonra değişmiş. Kurumun veri setini yeniden yayınlaması gerekir.");
         }
         if (response.status() != 200) {
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Kurumun ZKP motoru kanıt üretemedi.");
+            log.warn("[AgentZkpProver] Koşul kanıtı üretilemedi ({} {}): {}", response.status(),
+                    response.body().path("code").asText(), response.body().path("error").asText());
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    institutionId + " kurumunun koşul kanıtı üretilemedi. Ayrıntı kurumun ajan kaydında.");
         }
         Map<String, Object> proof = new LinkedHashMap<>();
         proof.put("proof", response.body().path("proof"));

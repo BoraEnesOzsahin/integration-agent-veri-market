@@ -49,7 +49,7 @@ export async function saveInstitutionCredential(row: InstitutionCredentialRow): 
   await pool.query(
     `INSERT INTO institution_credentials (key, institution_id, table_name, did, schema_id, cred_def_id, link_secret_id, held_credential_id, credential)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-     ON CONFLICT (key) DO UPDATE SET held_credential_id=$8, credential=$9, updated_at=NOW()`,
+     ON CONFLICT (key) DO UPDATE SET did=$4, schema_id=$5, cred_def_id=$6, link_secret_id=$7, held_credential_id=$8, credential=$9, updated_at=NOW()`,
     [row.key, row.institutionId, row.tableName, row.did, row.schemaId, row.credDefId, row.linkSecretId, row.heldCredentialId, JSON.stringify(row.credential)],
   )
 }
