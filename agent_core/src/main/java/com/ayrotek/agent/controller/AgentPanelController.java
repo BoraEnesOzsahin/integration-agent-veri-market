@@ -36,6 +36,10 @@ public class AgentPanelController {
     @Value("${agent.manager.local-url:http://127.0.0.1:8093}")
     private String managerUrl;
 
+    /** Veri setlerinin mantıksal tanımı platformun açık kataloğundan okunur. */
+    @Value("${agent.platform.url:}")
+    private String platformUrl;
+
     public AgentPanelController(IntegrationAgentService agentService, AgentDatabaseService databaseService,
                                 ExposurePolicyService policy, AgentActivityLog activity) {
         this.agentService = agentService;
@@ -53,6 +57,7 @@ public class AgentPanelController {
         out.put("databaseConfigured", databaseService.isDbConnected());
         out.put("zkpEngine", agentService.isAnonCredsEngineAvailable());
         out.put("policyFile", policy.file().toString());
+        out.put("platformUrl", platformUrl);
         out.put("manager", managerStatus());
         return out;
     }
@@ -65,21 +70,25 @@ public class AgentPanelController {
         return out;
     }
 
-    public record PolicyRequest(Map<String, List<String>> tables) {}
+    public record PolicyRequest(Map<String, ExposurePolicyService.DatasetMapping> datasets) {}
 
-    /** Seçilen her sütun veritabanında gerçekten var olan sayısal bir sütun olmalıdır. Kayıttan sonra koordinatördeki liste yenilenir. */
+    /** Her eşlenen sütun, seçilen tabloda gerçekten var olan sayısal bir sütun olmalıdır. Kayıttan sonra koordinatördeki liste yenilenir. */
     @PutMapping("/policy")
     public Map<String, Object> savePolicy(@RequestBody PolicyRequest request) throws SQLException {
-        Map<String, List<String>> requested = request == null || request.tables() == null ? Map.of() : request.tables();
+        Map<String, ExposurePolicyService.DatasetMapping> requested = request == null || request.datasets() == null ? Map.of() : request.datasets();
         for (var entry : requested.entrySet()) {
-            List<String> columns = entry.getValue() == null ? List.of() : entry.getValue();
-            if (columns.isEmpty()) {
+            var mapping = entry.getValue();
+            if (mapping == null || mapping.columns() == null || mapping.columns().values().stream().allMatch(v -> v == null || v.isBlank())) {
                 continue;
             }
-            List<String> numeric = databaseService.numericColumns(entry.getKey().trim().toLowerCase());
-            for (String column : columns) {
-                if (!numeric.contains(column.trim().toLowerCase())) {
-                    throw new IllegalArgumentException("'" + entry.getKey() + "." + column + "' bu veritabanında sayısal bir sütun değil.");
+            if (mapping.table() == null || mapping.table().isBlank()) {
+                throw new IllegalArgumentException("'" + entry.getKey() + "' için tablo seçilmedi.");
+            }
+            List<String> numeric = databaseService.numericColumns(mapping.table().trim().toLowerCase());
+            for (var column : mapping.columns().entrySet()) {
+                String local = column.getValue();
+                if (local != null && !local.isBlank() && !numeric.contains(local.trim().toLowerCase())) {
+                    throw new IllegalArgumentException("'" + mapping.table() + "." + local + "' bu veritabanında sayısal bir sütun değil.");
                 }
             }
         }
@@ -87,6 +96,57 @@ public class AgentPanelController {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("policy", saved);
         out.put("coordinatorUpdated", reregister());
+        return out;
+    }
+
+    /**
+     * Platformun açık kataloğundaki veri setleri ve mantıksal sütunları. Aynı anahtarı kullanan veri setleri tek satırda toplanır.
+     * Eski biçimdeki veri setlerinde sütun tanımı yoktur; yayınlanmış sütunlar gösterilir.
+     */
+    @GetMapping("/catalog")
+    public Map<String, Object> catalog() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (platformUrl == null || platformUrl.isBlank()) {
+            out.put("available", false);
+            out.put("error", "PLATFORM_URL ayarlı değil.");
+            return out;
+        }
+        try {
+            HttpResponse<String> resp = http.send(HttpRequest.newBuilder(URI.create(platformUrl.replaceAll("/+$", "") + "/api/v1/chambers"))
+                    .timeout(Duration.ofSeconds(5)).GET().build(), HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() != 200) {
+                throw new IllegalStateException("HTTP " + resp.statusCode());
+            }
+            Map<String, Map<String, Object>> byKey = new TreeMap<>();
+            for (JsonNode chamber : mapper.readTree(resp.body())) {
+                String key = chamber.path("category").asText();
+                Map<String, Object> entry = byKey.computeIfAbsent(key, k -> {
+                    Map<String, Object> e = new LinkedHashMap<>();
+                    e.put("key", k);
+                    e.put("names", new ArrayList<String>());
+                    e.put("columns", new LinkedHashMap<String, String>());
+                    e.put("member", false);
+                    return e;
+                });
+                @SuppressWarnings("unchecked") List<String> names = (List<String>) entry.get("names");
+                names.add(chamber.path("name").asText());
+                @SuppressWarnings("unchecked") Map<String, String> columns = (Map<String, String>) entry.get("columns");
+                chamber.path("columns").forEach(c -> columns.putIfAbsent(c.path("name").asText(), c.path("label").asText("")));
+                if (chamber.path("columns").isEmpty()) {
+                    chamber.path("participants").forEach(p -> p.path("detectedSchema").forEach(f -> {
+                        if (f.path("encrypted").asBoolean()) columns.putIfAbsent(f.path("fieldName").asText(), "");
+                    }));
+                }
+                chamber.path("participants").forEach(p -> {
+                    if (p.path("nodeId").asText().equalsIgnoreCase(agentService.getInstitutionId())) entry.put("member", true);
+                });
+            }
+            out.put("available", true);
+            out.put("datasets", byKey.values());
+        } catch (Exception e) {
+            out.put("available", false);
+            out.put("error", "Platform kataloğu okunamadı (" + platformUrl + "): " + e.getMessage());
+        }
         return out;
     }
 

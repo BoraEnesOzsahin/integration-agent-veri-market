@@ -4,8 +4,10 @@
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const fmtTime = iso => { if (!iso || iso === 'YOK') return '—'; const d = new Date(iso); return isNaN(d) ? iso : d.toLocaleString('tr-TR'); };
 
-  let saved = {};      // tablo -> [sütun] (kayıtlı)
-  let selected = {};   // tablo -> Set(sütun) (ekranda)
+  let saved = {};      // anahtar -> { table, columns: { mantıksal: yerel } } (kayıtlı)
+  let draft = {};      // ekrandaki eşleme
+  let localTables = []; // kurumun tabloları ve sayısal sütunları
+  let catalog = [];     // platformdaki veri setleri
 
   async function api(path, options = {}) {
     const res = await fetch('/api/v1/panel' + path, {
@@ -36,105 +38,115 @@
       ['Konsorsiyum onayı', m.reachable === false ? '—' : pill(!!m.isApproved, 'Onaylı', 'Onay bekliyor', true)],
       ['Veritabanı', pill(o.databaseConfigured, 'Ayarlı', 'Ayarlı değil')],
       ['Kanıt motoru', pill(o.zkpEngine, 'Çalışıyor', 'Ulaşılamıyor')],
-      ['Koordinatöre bildirilen tablolar', `<span class="mono">${esc(m.supportedDatasets || '—')}</span>`]
+      ['Koordinatöre bildirilen veri setleri', `<span class="mono">${esc(m.supportedDatasets || '—')}</span>`],
+      ['Platform kataloğu', o.platformUrl ? `<span class="mono small">${esc(o.platformUrl)}</span>` : pill(false, '', 'PLATFORM_URL ayarlı değil')]
     ].map(([label, value]) => `<div class="stat"><div class="label">${label}</div><div>${value}</div></div>`).join('');
   }
 
+  const copy = o => JSON.parse(JSON.stringify(o || {}));
+
   async function loadSchema() {
-    const s = await api('/schema');
-    saved = (s.policy && s.policy.tables) || {};
-    selected = {};
-    Object.entries(saved).forEach(([t, cols]) => { selected[t] = new Set(cols); });
-    renderTables(s.tables || []);
-    updateDirty();
+    const [schema, cat] = await Promise.all([api('/schema'), api('/catalog')]);
+    localTables = (schema.tables || []).filter(t => t.numericColumns.length);
+    saved = (schema.policy && schema.policy.datasets) || {};
+    draft = copy(saved);
+    catalog = cat.available ? cat.datasets : [];
+    $('catalog-note').innerHTML = cat.available ? '' : `<div class="notice warn">${esc(cat.error)} Yalnızca kayıtlı eşlemeler gösteriliyor.</div>`;
+    render();
   }
 
-  let lastTables = [];
-  function renderTables(tables) {
-    lastTables = tables;
-    if (!tables.length) {
-      $('tables').innerHTML = '<div class="notice warn">Veritabanında tablo bulunamadı. Ajanın bağlandığı veritabanını ve kullanıcının okuma iznini kontrol edin.</div>';
+  // Katalogdaki veri setleri ve katalogda olmayan kayıtlı eşlemeler; önce üyesi olunanlar
+  function entries() {
+    const list = catalog.map(c => ({ key: c.key, names: c.names, columns: c.columns, member: c.member }));
+    Object.keys(saved).filter(k => !list.some(e => e.key === k))
+      .forEach(k => list.push({ key: k, names: [], columns: Object.fromEntries(Object.keys(saved[k].columns).map(c => [c, ''])), member: false, orphan: true }));
+    return list.sort((a, b) => (b.member - a.member) || a.key.localeCompare(b.key));
+  }
+
+  function render() {
+    const list = entries();
+    if (!list.length) {
+      $('tables').innerHTML = '<div class="notice">Platformda henüz veri seti yok. Platformda bir veri seti açıldığında burada görünür.</div>';
+      updateDirty();
       return;
     }
-    // Veritabanından silinmiş ama listede kalmış tablolar da gösterilir ki kaldırılabilsin
-    const missing = Object.keys(saved).filter(t => !tables.some(x => x.name === t));
-    $('tables').innerHTML = tables.map(t => {
-      const sel = selected[t.name] || new Set();
-      const count = t.numericColumns.length;
-      return `<div class="table-card ${sel.size ? 'shared' : ''}">
+    $('tables').innerHTML = list.map(e => {
+      const m = draft[e.key] || { table: '', columns: {} };
+      const table = localTables.find(t => t.name === m.table);
+      const mapped = Object.values(m.columns || {}).filter(Boolean).length;
+      const tableOptions = ['<option value="">— eşleme yok —</option>']
+        .concat(localTables.map(t => `<option value="${esc(t.name)}" ${t.name === m.table ? 'selected' : ''}>${esc(t.name)} (${t.type === 'VIEW' ? 'görünüm' : 'tablo'}, ${t.rowCount == null ? '?' : t.rowCount.toLocaleString('tr-TR')} satır)</option>`));
+      const rows = Object.entries(e.columns).map(([logical, label]) => {
+        const options = ['<option value="">— paylaşma —</option>'].concat((table ? table.numericColumns : [])
+          .map(c => `<option value="${esc(c)}" ${m.columns && m.columns[logical] === c ? 'selected' : ''}>${esc(c)}</option>`));
+        return `<div><span class="mono">${esc(logical)}</span>${label ? `<div class="small faint">${esc(label)}</div>` : ''}</div>
+          <select data-key="${esc(e.key)}" data-col="${esc(logical)}" ${table ? '' : 'disabled'}>${options.join('')}</select>`;
+      }).join('');
+      return `<div class="table-card ${mapped ? 'shared' : ''}">
         <div class="table-head">
-          <div><strong class="mono" style="font-size:14px">${esc(t.name)}</strong>
-            <span class="small faint">${t.type === 'VIEW' ? 'görünüm' : 'tablo'} · ${t.rowCount == null ? 'satır sayısı okunamadı' : t.rowCount.toLocaleString('tr-TR') + ' satır'}</span></div>
-          <div>${sel.size ? `<span class="pill ok">${sel.size} sütun paylaşılıyor</span>` : '<span class="pill warn">Paylaşılmıyor</span>'}
-            ${count ? `<button data-all="${esc(t.name)}">${sel.size === count ? 'Hiçbirini seçme' : 'Tümünü seç'}</button>` : ''}</div>
+          <div><strong>${esc(e.names.length ? e.names.join(', ') : e.key)}</strong>
+            <div class="small faint">Anahtar: <span class="mono">${esc(e.key)}</span>${e.member ? ' · üyesiniz' : ''}${e.orphan ? ' · platformda artık yok' : ''}</div></div>
+          <div>${mapped ? `<span class="pill ok">${mapped} sütun eşlendi</span>` : '<span class="pill warn">Eşlenmedi</span>'}</div>
         </div>
-        <div class="columns">
-          ${count ? t.numericColumns.map(c => `<label class="col"><input type="checkbox" data-table="${esc(t.name)}" data-col="${esc(c)}" ${sel.has(c) ? 'checked' : ''}><span class="mono">${esc(c)}</span></label>`).join('')
-            : '<span class="small faint">Sayısal sütun yok: bu tablo paylaşılamaz.</span>'}
-        </div>
-        ${t.otherColumns.length ? `<div class="small faint" style="margin-top:6px">Paylaşılamaz (sayısal değil veya kimlik): <span class="mono">${esc(t.otherColumns.join(', '))}</span></div>` : ''}
+        <div class="map"><div class="small muted">Tablonuz</div><select data-key="${esc(e.key)}" data-table="1">${tableOptions.join('')}</select>${rows}</div>
       </div>`;
-    }).join('') + missing.map(t => `<div class="table-card"><div class="notice bad"><span class="mono">${esc(t)}</span> listede ama veritabanında yok. Kaydettiğinizde listeden çıkar.</div></div>`).join('');
+    }).join('');
+    updateDirty();
   }
 
   function current() {
     const out = {};
-    Object.entries(selected).forEach(([t, set]) => {
-      if (set.size && lastTables.some(x => x.name === t)) out[t] = [...set].sort();
+    Object.entries(draft).forEach(([k, m]) => {
+      const cols = Object.fromEntries(Object.entries(m.columns || {}).filter(([, v]) => v));
+      if (m.table && Object.keys(cols).length) out[k] = { table: m.table, columns: cols };
     });
     return out;
   }
 
   function updateDirty() {
-    const canonical = o => JSON.stringify(Object.keys(o).sort().map(t => [t, [...o[t]].sort()]));
+    const canonical = o => JSON.stringify(Object.keys(o).sort().map(k => [k, o[k].table, Object.entries(o[k].columns).sort()]));
     const dirty = canonical(current()) !== canonical(saved);
     $('save').disabled = !dirty;
     $('reset').disabled = !dirty;
-    $('dirty').textContent = dirty ? 'Kaydedilmemiş değişiklik var.' : (Object.keys(saved).length ? '' : 'Henüz hiçbir tablo paylaşılmıyor.');
+    $('dirty').textContent = dirty ? 'Kaydedilmemiş değişiklik var.' : (Object.keys(saved).length ? '' : 'Henüz hiçbir veri seti eşlenmedi.');
   }
 
   $('tables').addEventListener('change', e => {
-    const box = e.target.closest('input[data-table]');
-    if (!box) return;
-    const t = box.dataset.table;
-    selected[t] = selected[t] || new Set();
-    box.checked ? selected[t].add(box.dataset.col) : selected[t].delete(box.dataset.col);
-    renderTables(lastTables);
-    updateDirty();
-  });
-
-  $('tables').addEventListener('click', e => {
-    const btn = e.target.closest('button[data-all]');
-    if (!btn) return;
-    const t = lastTables.find(x => x.name === btn.dataset.all);
-    const sel = selected[t.name] || new Set();
-    selected[t.name] = sel.size === t.numericColumns.length ? new Set() : new Set(t.numericColumns);
-    renderTables(lastTables);
-    updateDirty();
+    const sel = e.target.closest('select[data-key]');
+    if (!sel) return;
+    const key = sel.dataset.key;
+    draft[key] = draft[key] || { table: '', columns: {} };
+    if (sel.dataset.table) {
+      // Tablo değişince aynı adlı sütunlar önerilir; diğerleri boş kalır
+      const table = localTables.find(t => t.name === sel.value);
+      const logical = Object.keys((entries().find(x => x.key === key) || { columns: {} }).columns);
+      draft[key] = { table: sel.value, columns: Object.fromEntries(logical.map(c => [c, table && table.numericColumns.includes(c) ? c : ''])) };
+    } else {
+      draft[key].columns[sel.dataset.col] = sel.value;
+    }
+    render();
   });
 
   $('reset').addEventListener('click', () => {
-    selected = {};
-    Object.entries(saved).forEach(([t, cols]) => { selected[t] = new Set(cols); });
-    renderTables(lastTables);
-    updateDirty();
+    draft = copy(saved);
+    render();
     $('save-result').innerHTML = '';
   });
 
   $('save').addEventListener('click', async () => {
     $('save').disabled = true;
     try {
-      const r = await api('/policy', { method: 'PUT', body: JSON.stringify({ tables: current() }) });
-      saved = r.policy.tables || {};
+      const r = await api('/policy', { method: 'PUT', body: JSON.stringify({ datasets: current() }) });
+      saved = r.policy.datasets || {};
+      draft = copy(saved);
       $('save-result').innerHTML = r.coordinatorUpdated
-        ? '<div class="notice ok">Kaydedildi. Koordinatör yeni tablo listesini aldı.</div>'
-        : '<div class="notice warn">Kaydedildi ve ajan yeni listeyi hemen uyguluyor. Koordinatöre bildirilemedi: bağlantı gelince yönetici servisi kaydı yeniler.</div>';
+        ? '<div class="notice ok">Kaydedildi. Koordinatör eşlenen veri setlerini aldı. Platformda veri setini yayınlayabilirsiniz.</div>'
+        : '<div class="notice warn">Kaydedildi ve ajan yeni eşlemeyi hemen uyguluyor. Koordinatöre bildirilemedi: bağlantı gelince yönetici servisi kaydı yeniler.</div>';
       await loadOverview();
     } catch (e) {
       $('save-result').innerHTML = `<div class="notice bad">Kaydedilemedi: ${esc(e.message)}</div>`;
     }
-    renderTables(lastTables);
-    updateDirty();
+    render();
   });
 
   async function loadActivity() {
@@ -157,7 +169,7 @@
     }
   }
 
-  loadSchema().catch(e => { $('tables').innerHTML = `<div class="notice bad">Şema okunamadı: ${esc(e.message)}</div>`; });
+  loadSchema().catch(e => { $('tables').innerHTML = `<div class="notice bad">Veri setleri okunamadı: ${esc(e.message)}</div>`; });
   refresh();
   setInterval(refresh, 10000);
 })();

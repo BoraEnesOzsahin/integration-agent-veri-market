@@ -1,12 +1,12 @@
 package com.ayrotek.agent.service;
 
+import com.ayrotek.agent.service.ExposurePolicyService.DatasetMapping;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -20,41 +20,56 @@ class ExposurePolicyServiceTest {
         return new ExposurePolicyService(file.toString(), "Kurum_T");
     }
 
-    /** Liste yoksa hiçbir tablo açık değildir. */
+    /** Eşleme yoksa hiçbir veri seti açık değildir. */
     @Test
-    void deniesEverythingWithoutPolicy() {
+    void deniesEverythingWithoutMapping() {
         ExposurePolicyService policy = service(dir.resolve("yok.json"));
-        assertThrows(ResponseStatusException.class, () -> policy.requireAllowed("verimarket_veri", "tutar"));
-        assertTrue(policy.allowedColumns("verimarket_veri").isEmpty());
+        assertThrows(ResponseStatusException.class, () -> policy.resolve("kar_analizi", "kar"));
+        assertThrows(ResponseStatusException.class, () -> policy.requireDataset("kar_analizi"));
     }
 
+    /** Mantıksal ad kurumun kendi tablosuna ve sütununa çevrilir; yeniden başlatmadan sonra da. */
     @Test
-    void allowsOnlySelectedColumnsAndSurvivesRestart() {
+    void resolvesLogicalNamesToLocalOnesAndSurvivesRestart() {
         Path file = dir.resolve("policy.json");
-        service(file).replace(Map.of("verimarket_veri", List.of("Tutar", "adet"), "maaslar", List.of()));
+        service(file).replace(Map.of(
+                "kar_analizi", new DatasetMapping("banka_finans_ozet", Map.of("kar", "net_kar", "gelir", "brut_gelir")),
+                "bos", new DatasetMapping("x", Map.of("a", ""))));
 
         ExposurePolicyService reloaded = service(file);
-        assertDoesNotThrow(() -> reloaded.requireAllowed("VERIMARKET_VERI", "tutar"));
-        assertDoesNotThrow(() -> reloaded.requireAllowed("verimarket_veri", null));
-        assertEquals(List.of("adet", "tutar"), reloaded.allowedColumns("verimarket_veri"));
-        ResponseStatusException column = assertThrows(ResponseStatusException.class, () -> reloaded.requireAllowed("verimarket_veri", "maas"));
+        assertEquals(new ExposurePolicyService.Resolved("banka_finans_ozet", "net_kar"), reloaded.resolve("KAR_ANALIZI", "kar"));
+        assertEquals(new ExposurePolicyService.Resolved("banka_finans_ozet", "brut_gelir"), reloaded.resolve("kar_analizi", "gelir"));
+        ResponseStatusException column = assertThrows(ResponseStatusException.class, () -> reloaded.resolve("kar_analizi", "gider"));
         assertEquals(403, column.getStatusCode().value());
-        // Sütunsuz seçilen tablo açık sayılmaz
-        assertThrows(ResponseStatusException.class, () -> reloaded.requireAllowed("maaslar", null));
+        // Sütunu eşlenmemiş veri seti açık sayılmaz
+        assertThrows(ResponseStatusException.class, () -> reloaded.requireDataset("bos"));
+    }
+
+    /** Eski dosya biçimi: anahtar tablo adıdır, sütunlar aynı adla eşlenir. */
+    @Test
+    void readsTheOldSharingListFormat() throws Exception {
+        Path file = dir.resolve("eski.json");
+        Files.writeString(file, "{\"tables\":{\"gelir_gider\":[\"kar\",\"gelir\"]}}");
+        ExposurePolicyService policy = service(file);
+        assertEquals(new ExposurePolicyService.Resolved("gelir_gider", "kar"), policy.resolve("gelir_gider", "kar"));
+        assertThrows(ResponseStatusException.class, () -> policy.resolve("gelir_gider", "gider"));
     }
 
     @Test
     void rejectsNamesThatCouldEscapeTheQuery() {
         ExposurePolicyService policy = service(dir.resolve("p.json"));
-        assertThrows(IllegalArgumentException.class, () -> policy.replace(Map.of("t; drop table x", List.of("a"))));
-        assertThrows(IllegalArgumentException.class, () -> policy.requireAllowed("t", "a)--"));
+        assertThrows(IllegalArgumentException.class,
+                () -> policy.replace(Map.of("k", new DatasetMapping("t; drop table x", Map.of("a", "b")))));
+        assertThrows(IllegalArgumentException.class,
+                () -> policy.replace(Map.of("k", new DatasetMapping("t", Map.of("a", "b)--")))));
+        assertThrows(IllegalArgumentException.class, () -> policy.resolve("k", "a)--"));
     }
 
     /** Bozuk dosya "her şey açık" diye yorumlanmaz: ajan başlamaz. */
     @Test
     void corruptPolicyFailsClosed() throws Exception {
         Path file = dir.resolve("bozuk.json");
-        Files.writeString(file, "{tables:");
+        Files.writeString(file, "{datasets:");
         assertThrows(IllegalStateException.class, () -> service(file));
     }
 }

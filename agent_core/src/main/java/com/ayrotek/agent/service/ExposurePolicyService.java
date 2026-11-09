@@ -18,8 +18,9 @@ import java.time.Instant;
 import java.util.*;
 
 /**
- * Kurumun paylaşıma açtığı tablolar ve sütunlar. Kurumun kendi makinesindeki dosyada durur ve yalnızca yerel panelden değişir.
- * Listede olmayan tablo veya sütun ne yayınlanır ne sorgulanır; dosya yoksa hiçbir şey açık değildir.
+ * Kurumun veri seti eşlemesi: platformdaki veri seti anahtarı ve mantıksal sütunlar → kurumun kendi tablosu ve sütunları.
+ * Kurumun makinesindeki dosyada durur ve yalnızca yerel panelden değişir. Gerçek tablo ve sütun adları makineden çıkmaz.
+ * Eşlenmemiş veri seti veya sütun ne yayınlanır ne sorgulanır; dosya yoksa hiçbir şey açık değildir.
  */
 @Service
 public class ExposurePolicyService {
@@ -31,8 +32,14 @@ public class ExposurePolicyService {
     private final Path file;
     private volatile Policy policy;
 
-    /** tablo → paylaşılan sütunlar. */
-    public record Policy(Map<String, List<String>> tables, Instant updatedAt) {}
+    /** Bir veri setinin eşlemesi: kurumun tablosu ve mantıksal sütun → yerel sütun. */
+    public record DatasetMapping(String table, Map<String, String> columns) {}
+
+    /** anahtar → eşleme. */
+    public record Policy(Map<String, DatasetMapping> datasets, Instant updatedAt) {}
+
+    /** Bir mantıksal sütunun kurumdaki karşılığı. */
+    public record Resolved(String table, String column) {}
 
     public ExposurePolicyService(@Value("${agent.policy.file:}") String configured,
                                  @Value("${agent.institution-id}") String institutionId) {
@@ -44,23 +51,34 @@ public class ExposurePolicyService {
 
     private Policy load() {
         if (!Files.exists(file)) {
-            log.warn("[ExposurePolicy] {} yok: hiçbir tablo paylaşıma açık değil. Yerel panelden seçin.", file);
+            log.warn("[ExposurePolicy] {} yok: hiçbir veri seti eşlenmedi. Yerel panelden eşleyin.", file);
             return new Policy(Map.of(), null);
         }
         try {
             JsonNode root = mapper.readTree(file.toFile());
-            Map<String, List<String>> tables = new TreeMap<>();
+            Map<String, DatasetMapping> datasets = new TreeMap<>();
+            root.path("datasets").fields().forEachRemaining(e -> {
+                Map<String, String> columns = new TreeMap<>();
+                e.getValue().path("columns").fields().forEachRemaining(c -> columns.put(c.getKey(), c.getValue().asText()));
+                datasets.put(e.getKey(), new DatasetMapping(e.getValue().path("table").asText(), Collections.unmodifiableMap(columns)));
+            });
+            // Eski biçim {"tables": {tablo: [sütun]}}: anahtar tablo adıdır, sütunlar aynı adla eşlenir
             root.path("tables").fields().forEachRemaining(e -> {
-                List<String> columns = new ArrayList<>();
-                e.getValue().forEach(c -> columns.add(c.asText()));
-                tables.put(e.getKey(), List.copyOf(columns));
+                Map<String, String> columns = new TreeMap<>();
+                e.getValue().forEach(c -> columns.put(c.asText(), c.asText()));
+                datasets.putIfAbsent(e.getKey(), new DatasetMapping(e.getKey(), Collections.unmodifiableMap(columns)));
+            });
+            datasets.forEach((key, m) -> {
+                normalize(key);
+                normalize(m.table());
+                m.columns().forEach((logical, local) -> { normalize(logical); normalize(local); });
             });
             Instant updated = root.hasNonNull("updatedAt") ? Instant.parse(root.get("updatedAt").asText()) : null;
-            log.info("[ExposurePolicy] Paylaşılan tablolar: {}", tables.keySet());
-            return new Policy(Collections.unmodifiableMap(tables), updated);
+            log.info("[ExposurePolicy] Eşlenen veri setleri: {}", datasets.keySet());
+            return new Policy(Collections.unmodifiableMap(datasets), updated);
         } catch (IOException | RuntimeException e) {
             // Bozuk dosya açık kabul edilmez
-            throw new IllegalStateException("Paylaşım listesi okunamadı (" + file + "): " + e.getMessage(), e);
+            throw new IllegalStateException("Eşleme dosyası okunamadı (" + file + "): " + e.getMessage(), e);
         }
     }
 
@@ -72,51 +90,63 @@ public class ExposurePolicyService {
         return file;
     }
 
-    public List<String> allowedColumns(String table) {
-        return policy.tables().getOrDefault(normalize(table), List.of());
+    /** Veri setinin eşlenmiş mantıksal sütunları. Eşleme yoksa reddedilir. */
+    public DatasetMapping requireDataset(String datasetKey) {
+        String key = normalize(datasetKey);
+        DatasetMapping mapping = policy.datasets().get(key);
+        if (mapping == null || mapping.columns().isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "'" + key + "' veri seti bu kurumda eşlenmedi.");
+        }
+        return mapping;
     }
 
-    /** Yayın ve sorgu için tek kapı: kurum açmadıysa istek kurum verisine dokunmadan reddedilir. */
-    public void requireAllowed(String table, String column) {
-        String t = normalize(table);
-        String c = column == null ? null : normalize(column);
-        List<String> columns = policy.tables().get(t);
-        if (columns == null) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "'" + t + "' tablosu bu kurumda paylaşıma açık değil.");
+    /** Yayın ve sorgu için tek kapı: kurum eşlemediyse istek kurum verisine dokunmadan reddedilir. */
+    public Resolved resolve(String datasetKey, String logicalColumn) {
+        String column = normalize(logicalColumn);
+        DatasetMapping mapping = requireDataset(datasetKey);
+        String local = mapping.columns().get(column);
+        if (local == null) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "'" + normalize(datasetKey) + "." + column + "' sütunu bu kurumda eşlenmedi.");
         }
-        if (c != null && !columns.contains(c)) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "'" + t + "." + c + "' sütunu bu kurumda paylaşıma açık değil.");
-        }
+        return new Resolved(mapping.table(), local);
     }
 
-    /** Dosya önce geçici olarak yazılıp yerine taşınır: yarım yazılmış liste hiçbir zaman okunmaz. */
-    public synchronized Policy replace(Map<String, List<String>> requested) {
-        Map<String, List<String>> tables = new TreeMap<>();
-        requested.forEach((table, columns) -> {
-            String t = normalize(table);
-            List<String> cols = columns == null ? List.of() : columns.stream().map(ExposurePolicyService::normalize).distinct().sorted().toList();
-            if (!cols.isEmpty()) {
-                tables.put(t, cols);
+    /** Dosya önce geçici olarak yazılıp yerine taşınır: yarım yazılmış eşleme hiçbir zaman okunmaz. */
+    public synchronized Policy replace(Map<String, DatasetMapping> requested) {
+        Map<String, DatasetMapping> datasets = new TreeMap<>();
+        requested.forEach((key, m) -> {
+            if (m == null || m.columns() == null) {
+                return;
+            }
+            Map<String, String> columns = new TreeMap<>();
+            m.columns().forEach((logical, local) -> {
+                if (local != null && !local.isBlank()) {
+                    columns.put(normalize(logical), normalize(local));
+                }
+            });
+            if (!columns.isEmpty()) {
+                datasets.put(normalize(key), new DatasetMapping(normalize(m.table()), Collections.unmodifiableMap(columns)));
             }
         });
-        Policy next = new Policy(Collections.unmodifiableMap(tables), Instant.now());
+        Policy next = new Policy(Collections.unmodifiableMap(datasets), Instant.now());
         try {
             Files.createDirectories(file.toAbsolutePath().getParent());
             Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
-            mapper.writeValue(tmp.toFile(), Map.of("tables", next.tables(), "updatedAt", next.updatedAt().toString()));
+            mapper.writeValue(tmp.toFile(), Map.of("datasets", next.datasets(), "updatedAt", next.updatedAt().toString()));
             Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         } catch (IOException e) {
-            throw new IllegalStateException("Paylaşım listesi kaydedilemedi: " + e.getMessage(), e);
+            throw new IllegalStateException("Eşleme dosyası kaydedilemedi: " + e.getMessage(), e);
         }
         policy = next;
-        log.info("[ExposurePolicy] Paylaşım listesi güncellendi: {}", next.tables());
+        log.info("[ExposurePolicy] Eşleme güncellendi: {}", next.datasets().keySet());
         return next;
     }
 
     static String normalize(String name) {
         String n = name == null ? "" : name.trim().toLowerCase();
         if (!n.matches(NAME)) {
-            throw new IllegalArgumentException("Geçersiz tablo veya sütun adı: " + name);
+            throw new IllegalArgumentException("Geçersiz tablo, sütun veya veri seti adı: " + name);
         }
         return n;
     }

@@ -18,6 +18,9 @@ agent:
     file: ${AGENT_EXPOSURE_POLICY_FILE:}
   manager:
     local-url: ${AGENT_MANAGER_LOCAL_URL:http://127.0.0.1:8093}
+  # Veri setlerinin mantıksal tanımı için platformun açık kataloğu
+  platform:
+    url: ${AGENT_PLATFORM_URL:}
 
 anoncreds:
   service:

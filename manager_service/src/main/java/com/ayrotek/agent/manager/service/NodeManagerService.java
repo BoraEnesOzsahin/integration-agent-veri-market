@@ -229,7 +229,7 @@ public class NodeManagerService {
         return map;
     }
 
-    /** Paylaşım listesindeki tablolar, virgülle ve sıralı. Dosya yoksa veya okunamazsa hiçbir tablo bildirilmez. */
+    /** Eşlenen veri setleri, virgülle ve sıralı. Dosya yoksa veya okunamazsa hiçbir veri seti bildirilmez. */
     String supportedDatasets() {
         java.nio.file.Path file = java.nio.file.Path.of(exposurePolicyFile != null && !exposurePolicyFile.isBlank()
                 ? exposurePolicyFile
@@ -238,9 +238,12 @@ public class NodeManagerService {
             return "";
         }
         try {
-            java.util.TreeSet<String> tables = new java.util.TreeSet<>();
-            objectMapper.readTree(file.toFile()).path("tables").fieldNames().forEachRemaining(tables::add);
-            return String.join(",", tables);
+            // Eşlenen veri setlerinin anahtarları; eski biçimde tablo adları
+            java.util.TreeSet<String> keys = new java.util.TreeSet<>();
+            JsonNode root = objectMapper.readTree(file.toFile());
+            root.path("datasets").fieldNames().forEachRemaining(keys::add);
+            root.path("tables").fieldNames().forEachRemaining(keys::add);
+            return String.join(",", keys);
         } catch (java.io.IOException e) {
             log.warn("[NodeManager] Paylaşım listesi okunamadı ({}): {}", file, e.getMessage());
             return "";

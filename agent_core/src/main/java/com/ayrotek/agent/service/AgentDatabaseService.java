@@ -14,7 +14,7 @@ import java.util.*;
  *
  * Sorumluluklar:
  * 1. Kurumun DMZ sınırları içerisindeki yerel PostgreSQL veritabanına bağlanma.
- * 2. Yalnızca kurumun paylaşıma açtığı tablo ve sütunları okuma (ham veri asla kurum dışına çıkmaz).
+ * 2. Yalnızca kurumun eşlediği veri seti sütunlarını okuma (ham veri asla kurum dışına çıkmaz).
  * 3. Yerel panel için şema bilgisini metadata üzerinden listeleme.
  */
 @Service
@@ -42,19 +42,16 @@ public class AgentDatabaseService {
     }
 
     /**
-     * Paylaşıma açık bir sütunun tablodaki toplamı. Açık değilse veritabanına hiç gidilmez.
-     * Eğer hedef kolon veya tablo veritabanında yoksa SQLException fırlatılır.
+     * Veri setinin mantıksal sütununun kurumun tablosundaki toplamı. Eşlenmemişse veritabanına hiç gidilmez.
+     * Eğer eşlenen tablo veya sütun veritabanında yoksa SQLException fırlatılır.
      */
-    public BigInteger queryLocalDatabaseMetric(String datasetName, String targetMetric, String institutionId) throws SQLException {
+    public BigInteger queryLocalDatabaseMetric(String datasetKey, String logicalColumn, String institutionId) throws SQLException {
         if (!isDbConnected()) {
             return null;
         }
-        String table = ExposurePolicyService.normalize(datasetName);
-        String column = ExposurePolicyService.normalize(targetMetric);
-        policy.requireAllowed(table, column);
-
-        String sql = "SELECT COALESCE(SUM(" + column + "), 0) FROM " + table;
-        log.info("[AgentDatabase - {}] Yerel PostgreSQL sorgusu yürütülüyor: {}", institutionId, sql);
+        ExposurePolicyService.Resolved target = policy.resolve(datasetKey, logicalColumn);
+        String sql = "SELECT COALESCE(SUM(" + target.column() + "), 0) FROM " + target.table();
+        log.info("[AgentDatabase - {}] {}.{} için yerel sorgu yürütülüyor", institutionId, datasetKey, logicalColumn);
 
         try (Connection conn = connect();
              Statement stmt = conn.createStatement();
@@ -69,15 +66,14 @@ public class AgentDatabaseService {
         }
     }
 
-    /** Yayına girecek sütunlar: tablonun sayısal sütunlarından kurumun paylaşıma açtıkları (sıralı). */
-    public List<String> listMetricColumns(String tableName) throws SQLException {
+    /** Yayına girecek mantıksal sütunlar: eşlenmiş ve kurumun tablosunda gerçekten sayısal olanlar (sıralı). */
+    public List<String> listMetricColumns(String datasetKey) throws SQLException {
         if (!isDbConnected()) {
             return List.of();
         }
-        String table = ExposurePolicyService.normalize(tableName);
-        policy.requireAllowed(table, null);
-        List<String> allowed = policy.allowedColumns(table);
-        return numericColumns(table).stream().filter(allowed::contains).toList();
+        ExposurePolicyService.DatasetMapping mapping = policy.requireDataset(datasetKey);
+        List<String> numeric = numericColumns(mapping.table());
+        return mapping.columns().entrySet().stream().filter(e -> numeric.contains(e.getValue())).map(Map.Entry::getKey).sorted().toList();
     }
 
     /** Yerel panel: public şemadaki tablo ve görünümler, sayısal sütunları ve satır sayılarıyla. Değer okunmaz. */

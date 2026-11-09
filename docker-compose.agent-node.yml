@@ -16,7 +16,7 @@
 # Açık olması gereken portlar: 8083 ve MP-SPDZ için 14000-14999 (TCP). Yönetici (8093) yalnızca 127.0.0.1'i dinler.
 # Yerel panel 127.0.0.1:8094'te açılır ve dışarıya açılmaz: makineden ya da SSH tüneliyle
 #   ssh -L 8094:127.0.0.1:8094 <kullanıcı>@<makine>   →   http://localhost:8094
-# Paylaşılacak tablo ve sütunlar panelden seçilir; seçilmeyen hiçbir şey yayınlanmaz ve sorgulanmaz.
+# Her veri seti panelden kurumun kendi tablosuna eşlenir; eşlenmeyen hiçbir şey yayınlanmaz ve sorgulanmaz.
 # İmajlar bu depodan derlenir (--build). İlk build birkaç dakika sürer ve internet gerektirir.
 # =============================================================================
 
@@ -133,6 +133,7 @@ services:
       - AGENT_EXPOSURE_POLICY_FILE=/data/exposure-policy.json
       - AGENT_PANEL_PORT=${AGENT_PANEL_PORT:-8094}
       - AGENT_MANAGER_LOCAL_URL=http://127.0.0.1:8093
+      - AGENT_PLATFORM_URL=${PLATFORM_URL:-}
     volumes:
       - agent_keys:/data
     depends_on:

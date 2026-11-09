@@ -32,8 +32,8 @@
     .table-card { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-top: 10px; }
     .table-card.shared { border-color: var(--accent); }
     .table-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; align-items: center; }
-    .columns { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 10px; }
-    label.col { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+    .map { display: grid; grid-template-columns: minmax(120px, 220px) minmax(0, 1fr); gap: 8px 12px; align-items: center; margin-top: 10px; }
+    select { font: inherit; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--text); max-width: 100%; }
     .bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-top: 14px; }
     button { font: inherit; border-radius: 8px; padding: 7px 14px; border: 1px solid var(--line); background: var(--card); color: var(--text); cursor: pointer; }
     button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -61,8 +61,9 @@
   </section>
 
   <section>
-    <h2>Paylaşılan veriler</h2>
-    <div class="muted small">Yalnızca işaretlediğiniz sütunlar yayınlanabilir ve sorgulanabilir. İşaretsiz tablo ve sütunlar için gelen her istek, veritabanına dokunulmadan reddedilir. Ham değer hiçbir zaman paylaşılmaz; dışarı yalnızca taahhüt, kanıt ve şifreli sonuç çıkar.</div>
+    <h2>Veri setleri</h2>
+    <div class="muted small">Platformdaki her veri seti mantıksal sütunlar tanımlar. Burada her biri için kendi tablonuzu ve sütunlarınızı seçin. Eşlemediğiniz veri seti veya sütun için gelen her istek, veritabanına dokunulmadan reddedilir. Tablo ve sütun adlarınız bu makineden çıkmaz; dışarı yalnızca taahhüt, kanıt ve şifreli sonuç çıkar.</div>
+    <div id="catalog-note"></div>
     <div id="tables"></div>
     <div class="bar">
       <div class="small muted" id="dirty"></div>
@@ -81,7 +82,7 @@
     <h2>Kurum anahtarı</h2>
     <div class="muted small">Platform yöneticisi kurumunuzu onaylarken bu anahtarı karşılaştırır.</div>
     <div class="mono" id="key"></div>
-    <div class="small faint" style="margin-top:8px">Paylaşım listesi: <span class="mono" id="policy-file"></span></div>
+    <div class="small faint" style="margin-top:8px">Eşleme dosyası: <span class="mono" id="policy-file"></span></div>
   </section>
 </main>
 <script src="panel.js"></script>
