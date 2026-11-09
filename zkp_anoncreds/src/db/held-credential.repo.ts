@@ -28,12 +28,3 @@ export async function saveHeldCredential(row: Omit<HeldCredentialRow, 'createdAt
   )
 }
 
-export async function getAllHeldCredentials(): Promise<HeldCredentialRow[]> {
-  const { rows } = await pool.query(`SELECT * FROM held_credentials ORDER BY created_at DESC`)
-  return rows.map(map)
-}
-
-export async function getHeldCredentialById(id: string): Promise<HeldCredentialRow | null> {
-  const { rows } = await pool.query(`SELECT * FROM held_credentials WHERE id=$1`, [id])
-  return rows[0] ? map(rows[0]) : null
-}

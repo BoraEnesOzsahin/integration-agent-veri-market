@@ -19,11 +19,6 @@ export async function updatePresentationVerified(id: string, verified: boolean):
   await pool.query(`UPDATE presentations SET verified=$1 WHERE id=$2`, [verified, id])
 }
 
-export async function getAllPresentations(): Promise<PresentationRow[]> {
-  const { rows } = await pool.query(`SELECT * FROM presentations ORDER BY created_at DESC`)
-  return rows.map((r) => ({ id: r.id, presentationRequestId: r.presentation_request_id, heldCredentialId: r.held_credential_id, presentation: r.presentation, verified: r.verified }))
-}
-
 export async function getPresentationById(id: string): Promise<PresentationRow | null> {
   const { rows } = await pool.query(`SELECT * FROM presentations WHERE id=$1`, [id])
   if (!rows[0]) return null

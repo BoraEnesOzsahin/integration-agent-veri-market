@@ -22,9 +22,3 @@ agent:
 anoncreds:
   service:
     url: ${ANONCREDS_SERVICE_URL:http://localhost:3000}
-
-springdoc:
-  api-docs:
-    enabled: false
-  swagger-ui:
-    enabled: false

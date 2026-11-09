@@ -42,7 +42,7 @@ public class AgentZkpProverService {
     public boolean isAnonCredsEngineAvailable() {
         try {
             HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(anonCredsServiceUrl + "/api/schema"))
+                    .uri(URI.create(anonCredsServiceUrl + "/api/health"))
                     .timeout(Duration.ofSeconds(2))
                     .GET()
                     .build();

@@ -9,7 +9,7 @@ COPY package*.json ./
 RUN npm install
 
 # Kaynak kodları ve konfigürasyonları kopyala
-COPY tsconfig.json schema.sql ./
+COPY tsconfig.json ./
 COPY src/ ./src/
 COPY circuits/build/ ./circuits/build/
 COPY server.ts ./

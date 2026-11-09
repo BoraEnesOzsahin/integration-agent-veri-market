@@ -194,7 +194,7 @@ public class NodeManagerService {
         String localAgent = cleanUrl(agentUrl).replace("host.docker.internal", "localhost");
         String localAnon = cleanUrl(anoncredsUrl).replace("host.docker.internal", "localhost");
         this.lastAgentHealth = pingUrl(localAgent + "/api/v1/agent/status");
-        this.lastAnoncredsHealth = pingUrl(localAnon + "/api/schema") || pingUrl(localAnon + "/api/v1/schema");
+        this.lastAnoncredsHealth = pingUrl(localAnon + "/api/health");
     }
 
     private boolean pingUrl(String url) {

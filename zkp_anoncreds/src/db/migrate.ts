@@ -183,25 +183,3 @@ export async function runMigrations(): Promise<void> {
   }
 }
 
-export async function clearAllData(): Promise<void> {
-  const client = await pool.connect()
-  try {
-    await client.query(`
-      TRUNCATE TABLE
-        presentations,
-        presentation_requests,
-        held_credentials,
-        issued_credentials,
-        credential_requests,
-        credential_offers,
-        link_secrets,
-        credential_definitions,
-        wallets,
-        schemas
-      RESTART IDENTITY CASCADE;
-    `)
-    console.log('[DB] Tüm veriler temizlendi.')
-  } finally {
-    client.release()
-  }
-}

@@ -51,11 +51,6 @@ export async function saveCredentialDefinition(
   )
 }
 
-export async function getAllCredentialDefinitions(): Promise<CredDefRow[]> {
-  const { rows } = await pool.query(`SELECT * FROM credential_definitions ORDER BY created_at DESC`)
-  return rows.map(map)
-}
-
 export async function getCredentialDefinitionById(id: string): Promise<CredDefRow | null> {
   const { rows } = await pool.query(`SELECT * FROM credential_definitions WHERE id=$1`, [id])
   return rows[0] ? map(rows[0]) : null

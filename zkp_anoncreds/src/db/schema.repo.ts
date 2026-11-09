@@ -25,11 +25,6 @@ export async function saveSchema(schema: SchemaModel): Promise<void> {
   )
 }
 
-export async function getAllSchemas(): Promise<SchemaRow[]> {
-  const { rows } = await pool.query(`SELECT * FROM schemas ORDER BY created_at DESC`)
-  return rows.map(map)
-}
-
 export async function getSchemaById(id: string): Promise<SchemaRow | null> {
   const { rows } = await pool.query(`SELECT * FROM schemas WHERE id=$1`, [id])
   return rows[0] ? map(rows[0]) : null

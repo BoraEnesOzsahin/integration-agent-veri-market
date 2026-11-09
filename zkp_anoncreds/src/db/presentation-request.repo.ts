@@ -25,11 +25,6 @@ export async function savePresentationRequest(row: PresentationRequestRow): Prom
   )
 }
 
-export async function getAllPresentationRequests(): Promise<PresentationRequestRow[]> {
-  const { rows } = await pool.query(`SELECT * FROM presentation_requests ORDER BY created_at DESC`)
-  return rows.map((r) => ({ id: r.id, credDefId: r.cred_def_id, requestedAttributes: r.requested_attributes, requestedPredicates: r.requested_predicates, nonce: r.nonce, name: r.name, version: r.version }))
-}
-
 export async function getPresentationRequestById(id: string): Promise<PresentationRequestRow | null> {
   const { rows } = await pool.query(`SELECT * FROM presentation_requests WHERE id=$1`, [id])
   if (!rows[0]) return null

@@ -27,11 +27,6 @@ export async function saveIssuedCredential(row: Omit<IssuedCredentialRow, 'creat
   )
 }
 
-export async function getAllIssuedCredentials(): Promise<IssuedCredentialRow[]> {
-  const { rows } = await pool.query(`SELECT * FROM issued_credentials ORDER BY created_at DESC`)
-  return rows.map(map)
-}
-
 export async function getIssuedCredentialById(id: string): Promise<IssuedCredentialRow | null> {
   const { rows } = await pool.query(`SELECT * FROM issued_credentials WHERE id=$1`, [id])
   return rows[0] ? map(rows[0]) : null
