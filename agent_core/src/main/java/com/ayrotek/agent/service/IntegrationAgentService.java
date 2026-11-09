@@ -176,7 +176,8 @@ public class IntegrationAgentService {
      * Kanıtlanan koşul cevabı gösterdiği için paket tüketici anahtarına şifrelenir; doğrulama tarayıcıda yapılır, sunucuya gitmez.
      * Kurum imzası paketi kuruma ve işe bağlar.
      */
-    private AgentPredicateProof buildPredicateProof(String jobId, String consumerKey, String datasetName, String metric, QuerySpec spec, BigInteger value, String nonce) {
+    private AgentPredicateProof buildPredicateProof(String jobId, String consumerKey, String datasetName, String metric, QuerySpec spec,
+                                                    BigInteger value, String nonce, String publishedCommitment) {
         Map<String, Object> pack = new LinkedHashMap<>();
         BigInteger limit = new BigInteger(spec.threshold());
         if (!AgentZkpProverService.isProvable(value) || !AgentZkpProverService.isProvable(limit)) {
@@ -192,7 +193,7 @@ public class IntegrationAgentService {
             };
             pack.put("status", "PROVEN");
             pack.put("comparator", proved);
-            pack.putAll(zkpProverService.provePredicate(institutionId, datasetName, metric, value, proved, limit, nonce));
+            pack.putAll(zkpProverService.provePredicate(institutionId, datasetName, metric, value, proved, limit, nonce, publishedCommitment));
         }
         String plain;
         try {
@@ -231,7 +232,7 @@ public class IntegrationAgentService {
                 value, spec.isRatio() ? readMetric(datasetName, spec.denominator()) : BigInteger.ONE));
         // Oranda sonuç taahhüt edilen değer değildir: bu kanıt yalnızca sütun değeri için çalışır
         AgentPredicateProof predicateProof = spec.isThreshold() && !spec.isRatio() && request.proofNonce() != null && request.proofNonce().matches("\\d{1,24}")
-                ? buildPredicateProof(jobId, consumerKey, datasetName, metric, spec, value, request.proofNonce())
+                ? buildPredicateProof(jobId, consumerKey, datasetName, metric, spec, value, request.proofNonce(), request.publishedCommitment())
                 : null;
         return new AgentPipelineResponse(
                 institutionId,

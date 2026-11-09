@@ -173,7 +173,9 @@ public class IntegrationAgentController {
             String requestManifest,
             String requestManifestSignature,
             /** Tüketicinin tarayıcısında üretilen nonce: koşul kanıtı buna bağlanır, koordinatör değiştirirse tüketici fark eder. */
-            String proofNonce
+            String proofNonce,
+            /** Bu veri setinde yayınlanmış taahhüt. Yalnızca eskimiş yayını erken bildirmek içindir; doğrulama tarayıcıdadır. */
+            String publishedCommitment
     ) {}
 
     /** Koşul kanıtı tüketici anahtarına şifrelidir: kanıtlanan koşul cevabı ele verdiği için koordinatör okuyamaz. */

@@ -141,13 +141,17 @@ export class InstitutionController {
   /** Koşul kanıtı (PLONK): koşul sağlanmıyorsa veya değer yayından sonra değiştiyse üretilmez. */
   createPredicateProof = async (req: Request, res: Response) => {
     try {
-      const { institutionId, tableName, metric, currentValue, comparator, limit, nonce } = req.body ?? {}
+      const { institutionId, tableName, metric, currentValue, comparator, limit, nonce, publishedCommitment } = req.body ?? {}
       const stored = await getPredicateCommitment(institutionId, tableName, metric)
       if (!stored) {
         return res.status(404).json({ ok: false, code: 'NO_COMMITMENT', error: 'Bu sütun için yayınlanmış taahhüt yok.' })
       }
       if (stored.value !== String(currentValue)) {
         return res.status(422).json({ ok: false, code: 'VALUE_CHANGED', error: 'Değer yayından sonra değişti.' })
+      }
+      // Taahhüt tabloya bağlı saklanır: aynı sütun başka bir veri setinde yeniden taahhüt edildiyse bu yayın eskimiştir
+      if (publishedCommitment && stored.commitment !== String(publishedCommitment)) {
+        return res.status(409).json({ ok: false, code: 'STALE_PUBLICATION', error: 'Bu veri setindeki yayın güncel taahhüde ait değil.' })
       }
       const { proof, publicSignals } = await this.predicateProofService.prove({ ...stored, comparator, limit: String(limit), nonce: String(nonce) })
       res.json({ ok: true, proof, publicSignals })

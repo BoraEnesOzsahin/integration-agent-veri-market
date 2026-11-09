@@ -153,7 +153,7 @@ public class AgentZkpProverService {
 
     /** Koşul kanıtı (PLONK): değeri açmadan taahhüt edilen değerin koşulu sağladığını gösterir. */
     public Map<String, Object> provePredicate(String institutionId, String tableName, String metric, java.math.BigInteger currentValue,
-                                              String comparator, java.math.BigInteger limit, String nonce) {
+                                              String comparator, java.math.BigInteger limit, String nonce, String publishedCommitment) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("institutionId", institutionId);
         body.put("tableName", tableName);
@@ -162,9 +162,16 @@ public class AgentZkpProverService {
         body.put("comparator", comparator);
         body.put("limit", limit.toString());
         body.put("nonce", nonce);
+        if (publishedCommitment != null && !publishedCommitment.isBlank()) {
+            body.put("publishedCommitment", publishedCommitment);
+        }
         ZkpResponse response = post("/api/institution/predicate-proof", body, 60);
         if (response.status() == 404) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, institutionId + " bu sütunu henüz yayınlamadı. Veri setinin yeniden yayınlanması gerekir.");
+        }
+        if (response.status() == 409 && "STALE_PUBLICATION".equals(response.body().path("code").asText())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    institutionId + " bu veri setindeki yayınını yenilemeli: yayından sonra aynı sütunu başka bir yayınla yeniden taahhüt etti.");
         }
         if (response.status() == 422 && "VALUE_CHANGED".equals(response.body().path("code").asText())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
