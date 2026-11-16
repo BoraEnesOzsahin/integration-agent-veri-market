@@ -96,8 +96,11 @@ RESULT_FIELD_PRIME = 2 ** 255 - 19
 RING_BITS = 128
 MASK_LIMB_BITS = 62  # MP-SPDZ metin girdisi işaretli 64 bit; büyük maske parçalar halinde okunur
 MASK_LIMBS = {True: 3, False: 5}  # halka 128 bit, alan 255 bit: maske sonucu istatistiksel olarak gizler
-FIXED_SCALE_BITS = 16
-RATIO_UNDEFINED = 2 ** 52  # oran çıktısında "payda sıfır" işareti; geçerli sonuç aralığının dışındadır
+# Oran 24 kesir bitiyle hesaplanır: son bitteki ±1 sapma (≈6e-8) dört ondalıklı gösterime neredeyse hiç yansımaz.
+# Toplam bit: kurum girdisi < 2^33 olduğundan pay ve payda < 2^37; 37 + 24 + 1 = 62 bit, -F 64 içinde kalır.
+FIXED_SCALE_BITS = 24
+FIXED_TOTAL_BITS = 62
+RATIO_UNDEFINED = 2 ** 62  # oran çıktısında "payda sıfır" işareti; geçerli sonuç (< 2^61) aralığının dışındadır
 INPUT_BOUNDS = {"SUM": 2 ** 62, "PRODUCT": 2 ** 40, "RATIO": 2 ** 33}
 MAX_PRODUCT_PARTIES = 5  # 40 bit * 5 = 200 bit; karşılaştırma -F 200 ile çalışır
 COMPARATORS = {">", ">=", "<", "<="}
@@ -194,7 +197,7 @@ def masked_circuit_source(n, ring, q):
     elif op == "PRODUCT":
         lines += ["r = a[0]", "for x in a[1:]:", "    r = r * x"]
     else:
-        lines += ["sfix.set_precision(%d, 54)" % FIXED_SCALE_BITS,
+        lines += ["sfix.set_precision(%d, %d)" % (FIXED_SCALE_BITS, FIXED_TOTAL_BITS),
                   "den = sum(b)",
                   "zero = (den == 0)",
                   "q = (sfix(sum(a)) / sfix(den)).v",

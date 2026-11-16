@@ -284,8 +284,8 @@ public class IntegrationAgentService {
                                  List<BigInteger> salts, List<List<String>> commitments, String inputCheck) {}
 
     /** Devrede kullanılan sabit noktalı ölçek ve "payda sıfır" işareti; mp_spdz_service.py ile aynı olmalı. */
-    private static final BigInteger FIXED_SCALE = BigInteger.ONE.shiftLeft(16);
-    private static final BigInteger RATIO_UNDEFINED = BigInteger.ONE.shiftLeft(52);
+    private static final BigInteger FIXED_SCALE = BigInteger.ONE.shiftLeft(24);
+    private static final BigInteger RATIO_UNDEFINED = BigInteger.ONE.shiftLeft(62);
 
     /** İşlem ve çıktı biçimi. Kurum bunu imzalar: koordinatör sorguyu değiştirirse tüketici fark eder. */
     private record QuerySpec(String operation, String denominator, String output, String comparator, String threshold) {
@@ -311,7 +311,7 @@ public class IntegrationAgentService {
                 if (!List.of(">", ">=", "<", "<=").contains(cmp)) {
                     throw badQuery("Eşik karşılaştırması geçersiz: " + cmp);
                 }
-                if (!limit.matches("RATIO".equals(op) ? "^-?\\d{1,12}(\\.\\d{1,4})?$" : "^-?\\d{1,18}$")) {
+                if (!limit.matches("RATIO".equals(op) ? "^-?\\d{1,11}(\\.\\d{1,4})?$" : "^-?\\d{1,18}$")) {
                     throw badQuery("Eşik değeri geçersiz: " + limit);
                 }
             }
