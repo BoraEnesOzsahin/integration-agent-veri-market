@@ -62,6 +62,21 @@ public class AgentZkpProverService {
 
     private record ZkpResponse(int status, JsonNode body) {}
 
+    /** Yayınlanan taahhüdün açılımı: değer, tuz ve taahhüt. Yalnızca bu makinede kalır; MPC girdi kontrolünde kullanılır. */
+    public record Opening(java.math.BigInteger value, java.math.BigInteger salt, String commitment) {}
+
+    public Opening opening(String institutionId, String tableName, String metric) {
+        ZkpResponse response = post("/api/institution/opening", Map.of("institutionId", institutionId, "tableName", tableName, "metric", metric), 10);
+        if (response.status() == 404) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, institutionId + " '" + metric + "' sütununu bu veri setinde yayınlamamış. Veri setinin yeniden yayınlanması gerekir.");
+        }
+        if (response.status() != 200) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Kurumun kanıt motoru taahhüdü okuyamadı.");
+        }
+        JsonNode b = response.body();
+        return new Opening(new java.math.BigInteger(b.path("value").asText()), new java.math.BigInteger(b.path("salt").asText()), b.path("commitment").asText());
+    }
+
     private ZkpResponse post(String path, Map<String, Object> body, int timeoutSeconds) {
         try {
             HttpRequest request = HttpRequest.newBuilder()

@@ -7,5 +7,6 @@ const ctrl = new InstitutionController()
 router.post('/credential', ctrl.issueCredential)
 router.post('/proof', ctrl.createProof)
 router.post('/predicate-proof', ctrl.createPredicateProof)
+router.post('/opening', ctrl.getOpening)
 
 export default router

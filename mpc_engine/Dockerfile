@@ -59,7 +59,9 @@ COPY --from=builder /src/Compiler ./Compiler
 COPY --from=builder /src/Scripts ./Scripts
 COPY --from=builder /src/Programs ./Programs
 
-COPY mp_spdz_service.py ./
+# BN254 asalıyla derleme için (girdi tutarlılığı kontrolü)
+RUN pip install --no-cache-dir gmpy2==2.1.5
+COPY mp_spdz_service.py poseidon_t3.json ./
 # SSL özel anahtarları imaja gömülmez; Player-Data çalışma anında doldurulur.
 RUN mkdir -p Player-Data
 

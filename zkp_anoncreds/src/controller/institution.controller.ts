@@ -139,6 +139,19 @@ export class InstitutionController {
   }
 
   /** Koşul kanıtı (PLONK): koşul sağlanmıyorsa veya değer yayından sonra değiştiyse üretilmez. */
+  /**
+   * Taahhüdün açılımı (değer ve tuz): yalnızca aynı makinedeki ajan çağırır; MPC girdi kontrolünde kurumun kendi
+   * değerinin ve tuzunun gizli girdisi olur. Motor 127.0.0.1'i dinler, tuz makineden çıkmaz.
+   */
+  getOpening = async (req: Request, res: Response) => {
+    const { institutionId, tableName, metric } = req.body ?? {}
+    const stored = await getPredicateCommitment(String(institutionId), String(tableName), String(metric))
+    if (!stored) {
+      return res.status(404).json({ ok: false, code: 'NO_COMMITMENT', error: 'Bu sütun için yayınlanmış taahhüt yok.' })
+    }
+    res.json({ ok: true, value: stored.value, salt: stored.salt, commitment: stored.commitment })
+  }
+
   createPredicateProof = async (req: Request, res: Response) => {
     try {
       const { institutionId, tableName, metric, currentValue, comparator, limit, nonce, publishedCommitment } = req.body ?? {}

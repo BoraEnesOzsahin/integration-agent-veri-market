@@ -85,8 +85,11 @@ public class IntegrationAgentService {
         }
     }
 
-    /** Kanonik iş bildirimi: iş|eşik|n|bitiş|1=url,2=url. Taraf adresleri yalnızca imzalı bildirimden kabul edilir. */
-    private void verifyJobManifest(AgentEngineInit init, String jobId) {
+    /**
+     * Kanonik iş bildirimi: iş|eşik|n|bitiş|1=url,2=url|1=C[/C],2=C[/C]. Taraf adresleri ve girdi kontrolündeki taahhütler
+     * yalnızca imzalı bildirimden kabul edilir. Son alan boşsa (iki kurum, halka protokolü) girdi kontrolü yoktur.
+     */
+    private String verifyJobManifest(AgentEngineInit init, String jobId) {
         String manifest = init.jobManifest();
         String sigHex = init.jobManifestSignature();
         if (manifest == null || sigHex == null || manifest.isBlank() || sigHex.isBlank()) {
@@ -94,7 +97,7 @@ public class IntegrationAgentService {
         }
         verifyCoordinatorSignature(manifest, sigHex);
         String[] f = manifest.split("\\|", -1);
-        if (f.length != 5 || !f[0].equals(jobId)
+        if (f.length != 6 || !f[0].equals(jobId)
                 || Integer.parseInt(f[1]) != init.threshold() || Integer.parseInt(f[2]) != init.totalParties()) {
             throw forbidden("İş bildirimi istekle uyuşmuyor (jobId/eşik/n).");
         }
@@ -114,6 +117,28 @@ public class IntegrationAgentService {
         if (!asked.equals(inManifest)) {
             throw forbidden("peerEndpoints imzalı bildirimle uyuşmuyor.");
         }
+        return f[5];
+    }
+
+    /** "1=C[/C],2=..." → taraf sırasıyla taahhütler. Her taraf ve her sütun için ondalık bir taahhüt olmalıdır. */
+    static List<List<String>> parseCommitments(String field, int n, int columns) {
+        Map<Integer, List<String>> byParty = new HashMap<>();
+        for (String kv : field.split(",")) {
+            String[] part = kv.split("=", 2);
+            List<String> values = List.of(part.length == 2 ? part[1].split("/", -1) : new String[0]);
+            if (part.length != 2 || values.size() != columns || values.stream().anyMatch(v -> !v.matches("\\d{1,80}"))) {
+                throw forbidden("İş bildirimindeki taahhüt listesi bozuk.");
+            }
+            byParty.put(Integer.parseInt(part[0]), values);
+        }
+        List<List<String>> ordered = new ArrayList<>();
+        for (int i = 1; i <= n; i++) {
+            if (!byParty.containsKey(i)) {
+                throw forbidden("İş bildiriminde taraf " + i + " için taahhüt yok.");
+            }
+            ordered.add(byParty.get(i));
+        }
+        return ordered;
     }
 
     private void verifyCoordinatorSignature(String payload, String sigHex) {
@@ -241,7 +266,7 @@ public class IntegrationAgentService {
                 new EncryptedConsumerValue(partyId, encrypted, "RSA/ECB/OAEPWithSHA-256AndMGF1Padding"),
                 "ON_PREMISE_PIPELINE_EXECUTED_SUCCESSFULLY",
                 Instant.now().toString(),
-                attest(jobId, partyId, 1, 1, "LOCAL_SINGLE_NODE", datasetName, metric, spec, consumerKey, encrypted, null),
+                attest(jobId, partyId, 1, 1, "LOCAL_SINGLE_NODE", datasetName, metric, spec, consumerKey, encrypted, null, ""),
                 predicateProof
         );
     }
@@ -255,7 +280,8 @@ public class IntegrationAgentService {
 
     private record EngineSession(BigInteger secret, BigInteger mask, String protocol, int partyId, int totalParties,
                                  int threshold, List<String> hosts, String certPem, long expiresAtEpochSec,
-                                 String datasetName, String targetMetric, BigInteger denominator, QuerySpec spec) {}
+                                 String datasetName, String targetMetric, BigInteger denominator, QuerySpec spec,
+                                 List<BigInteger> salts, List<List<String>> commitments, String inputCheck) {}
 
     /** Devrede kullanılan sabit noktalı ölçek ve "payda sıfır" işareti; mp_spdz_service.py ile aynı olmalı. */
     private static final BigInteger FIXED_SCALE = BigInteger.ONE.shiftLeft(16);
@@ -357,13 +383,17 @@ public class IntegrationAgentService {
         }
     }
 
-    /** Sonuç bildirimi: v2|kurum|iş|taraf|n|eşik|protokol|tablo|sütun|payda|işlem|çıktı|karşılaştırma|eşik değeri|anahtar özeti|maske özeti|maskeli sonuç */
+    /**
+     * Sonuç bildirimi: v3|kurum|iş|taraf|n|eşik|protokol|tablo|sütun|payda|işlem|çıktı|karşılaştırma|eşik değeri|anahtar özeti|
+     * maske özeti|maskeli sonuç|girdi kontrolü. Son alan boş ya da "poseidon:" + iş bildirimindeki taahhüt listesinin SHA-256 özetidir.
+     */
     private AgentAttestation attest(String jobId, int partyId, int totalParties, int threshold, String protocol,
-                                    String datasetName, String targetMetric, QuerySpec spec, String consumerKey, String encrypted, String masked) {
-        String payload = String.join("|", "v2", institutionId, jobId, String.valueOf(partyId), String.valueOf(totalParties),
+                                    String datasetName, String targetMetric, QuerySpec spec, String consumerKey, String encrypted, String masked,
+                                    String inputCheck) {
+        String payload = String.join("|", "v3", institutionId, jobId, String.valueOf(partyId), String.valueOf(totalParties),
                 String.valueOf(threshold), protocol, datasetName, targetMetric, spec.denominator(), spec.operation(), spec.output(),
                 spec.comparator(), spec.threshold(), cryptoService.sha256Hex(consumerKey),
-                cryptoService.sha256Hex(encrypted), masked != null ? masked : "");
+                cryptoService.sha256Hex(encrypted), masked != null ? masked : "", inputCheck);
         return new AgentAttestation(payload, chamberVcService.signAttestation(payload));
     }
 
@@ -382,7 +412,7 @@ public class IntegrationAgentService {
         }
         AgentEngineInit init = request.init();
         String jobId = requireName(init.jobId(), "JobId");
-        verifyJobManifest(init, jobId);
+        String committedField = verifyJobManifest(init, jobId);
         requireDatabase();
         String protocol = request.protocol();
         if (!"malicious-shamir".equals(protocol) && !"semi2k".equals(protocol)) {
@@ -408,6 +438,33 @@ public class IntegrationAgentService {
         String targetMetric = requireName(init.targetMetric(), "Sütun adı");
         BigInteger value = readMetric(datasetName, targetMetric);
         BigInteger denominator = spec.isRatio() ? readMetric(datasetName, spec.denominator()) : BigInteger.ZERO;
+
+        // Girdi kontrolü: MPC'ye giren değer, kurumun bu veri setinde yayınladığı taahhüde ait olmalıdır
+        List<BigInteger> salts = List.of();
+        List<List<String>> commitments = List.of();
+        String inputCheck = "";
+        if (!committedField.isEmpty()) {
+            if (!"malicious-shamir".equals(protocol)) {
+                throw forbidden("Girdi kontrolü yalnızca Shamir protokolünde yapılabilir.");
+            }
+            List<String> columns = spec.isRatio() ? List.of(targetMetric, spec.denominator()) : List.of(targetMetric);
+            commitments = parseCommitments(committedField, n, columns.size());
+            List<BigInteger> own = List.of(value, denominator);
+            salts = new ArrayList<>();
+            for (int c = 0; c < columns.size(); c++) {
+                var opening = zkpProverService.opening(institutionId, datasetName, columns.get(c));
+                if (!opening.commitment().equals(commitments.get(partyId - 1).get(c))) {
+                    throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.CONFLICT,
+                            institutionId + " bu veri setindeki yayınını yenilemeli: '" + columns.get(c) + "' taahhüdü güncel değil.");
+                }
+                if (!opening.value().equals(own.get(c))) {
+                    throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.CONFLICT,
+                            institutionId + " verisi yayından sonra değişmiş. Kurumun veri setini yeniden yayınlaması gerekir.");
+                }
+                salts.add(opening.salt());
+            }
+            inputCheck = "poseidon:" + cryptoService.sha256Hex(committedField);
+        }
         var proof = prove(jobId, init.nonce(), init.requestedPredicates(), init.schemaName(), datasetName);
 
         Map<String, Object> body = new LinkedHashMap<>();
@@ -416,12 +473,14 @@ public class IntegrationAgentService {
         body.put("numParties", n);
         body.put("protocol", protocol);
         putQuery(body, spec);
+        body.put("inputCheck", !inputCheck.isEmpty());
         String certPem = callEngine("/api/v1/mpc/party-prepare", body, 240).path("certPem").asText();
 
         long now = Instant.now().getEpochSecond();
         engineSessions.values().removeIf(s -> s.expiresAtEpochSec() < now);
         engineSessions.put(jobId, new EngineSession(value, newMask(protocol), protocol, partyId, n,
-                init.threshold(), hosts, certPem, now + 600, datasetName, targetMetric, denominator, spec));
+                init.threshold(), hosts, certPem, now + 600, datasetName, targetMetric, denominator, spec,
+                salts, commitments, inputCheck));
         return new AgentEnginePrepareResponse(institutionId, partyId, proof, certPem, "PREPARED_FOR_MP_SPDZ");
     }
 
@@ -456,6 +515,9 @@ public class IntegrationAgentService {
         putQuery(body, session.spec());
         body.put("input", session.secret().toString());
         body.put("denominator", session.denominator().toString());
+        body.put("inputCheck", !session.inputCheck().isEmpty());
+        body.put("salts", session.salts().stream().map(BigInteger::toString).toList());
+        body.put("commitments", session.commitments());
         body.put("mask", session.mask().toString());
         body.put("hosts", session.hosts());
         body.put("certs", engineCerts);
@@ -470,7 +532,7 @@ public class IntegrationAgentService {
                 new EncryptedConsumerValue(session.partyId(), encrypted, "RSA/ECB/OAEPWithSHA-256AndMGF1Padding"),
                 "MP_SPDZ_PARTY_COMPLETED",
                 attest(jobId, session.partyId(), session.totalParties(), session.threshold(), session.protocol(),
-                        session.datasetName(), session.targetMetric(), session.spec(), consumerKey, encrypted, masked));
+                        session.datasetName(), session.targetMetric(), session.spec(), consumerKey, encrypted, masked, session.inputCheck()));
     }
 
     private static void putQuery(Map<String, Object> body, QuerySpec spec) {
@@ -517,6 +579,10 @@ public class IntegrationAgentService {
                     .POST(java.net.http.HttpRequest.BodyPublishers.ofString(engineMapper.writeValueAsString(body)))
                     .build();
             var resp = engineHttp.send(req, java.net.http.HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() == 409) {
+                throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.CONFLICT,
+                        engineMapper.readTree(resp.body()).path("error").asText("Girdi kontrolü başarısız; sonuç açılmadı."));
+            }
             if (resp.statusCode() != 200) {
                 throw new org.springframework.web.server.ResponseStatusException(
                         org.springframework.http.HttpStatus.BAD_GATEWAY,

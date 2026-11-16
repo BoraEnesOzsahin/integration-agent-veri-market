@@ -48,9 +48,17 @@ def corruption_bound(threshold, n):
 
 def parse_result(text):
     for line in text.splitlines():
+        if INPUT_REJECTED_TAG in line:
+            flags = line.split(INPUT_REJECTED_TAG, 1)[1].split()
+            parties = [str(i + 1) for i, f in enumerate(flags) if f != "0"]
+            raise InputRejected("Taraf %s girdisi yayınladığı taahhüde ait değil; sonuç açılmadı." % ", ".join(parties))
         if RESULT_TAG in line:
             return int(line.split(RESULT_TAG, 1)[1].strip())
     return None
+
+class InputRejected(Exception):
+    """Bir kurumun MPC girdisi yayınladığı taahhütle uyuşmadı."""
+
 
 def job_data_dir(job_id):
     """Her iş kendi Player-Data klasöründe çalışır: anahtarlar ve girdiler işler arasında karışmaz.
@@ -94,6 +102,15 @@ INPUT_BOUNDS = {"SUM": 2 ** 62, "PRODUCT": 2 ** 40, "RATIO": 2 ** 33}
 MAX_PRODUCT_PARTIES = 5  # 40 bit * 5 = 200 bit; karşılaştırma -F 200 ile çalışır
 COMPARATORS = {">", ">=", "<", "<="}
 
+# Girdi tutarlılığı kontrolü: her kurumun MPC girdisi, yayınladığı Poseidon taahhüdüne ait olmalıdır.
+# Taahhüt BN254 skaler alanında olduğu için kontrollü devre bu alanda çalışır (yalnızca Shamir; halka protokolünde yapılamaz).
+BN254_PRIME = 21888242871839275222246405745257275088548364400416034343698204186575808495617
+COMMITMENT_OFFSET = 1 << 63  # zkp_anoncreds/predicate-proof-service.ts ile aynı: taahhüt Poseidon(değer + 2^63, tuz)
+BIG_LIMBS = 5  # 254 bitlik tuz ve taahhütler 62 bitlik parçalarla girilir
+INPUT_REJECTED_TAG = "AYROTEK_VERIMARKET_INPUT_REJECTED:"
+with open(os.path.join(BASE_DIR, "poseidon_t3.json")) as _fh:
+    POSEIDON = json.load(_fh)
+
 
 def parse_query(body):
     """İşlem türü ve çıktı biçimi. Devre kaynağına yalnızca doğrulanmış değerler girer."""
@@ -111,7 +128,51 @@ def parse_query(body):
         compare_value = int(body.get("compareValue", 0))
         if abs(compare_value) >= 2 ** 62:
             raise ValueError("Eşik değeri izin verilen aralığın dışında.")
-    return {"operation": op, "output": output, "comparator": comparator, "compareValue": compare_value}
+    return {"operation": op, "output": output, "comparator": comparator, "compareValue": compare_value,
+            "inputCheck": bool(body.get("inputCheck", False))}
+
+
+def field_prime(q):
+    return BN254_PRIME if q["inputCheck"] else RESULT_FIELD_PRIME
+
+
+def input_check_source(n, q):
+    """Her kurumun değeri (ve oranda paydası) ile tuzundan Poseidon hesaplanır ve yayınlanmış taahhütle karşılaştırılır.
+    Taahhüt listesini her kurum kendi kopyasından girer: listeyi tek bir taraf belirleyemez. Uyuşmazlıkta sonuç açılmaz."""
+    cols = 2 if q["operation"] == "RATIO" else 1
+    rounds_f, rounds_p = POSEIDON["roundsFull"], POSEIDON["roundsPartial"]
+    return [
+        "PC = [%s]" % ", ".join(POSEIDON["C"]),
+        "PM = [[%s]]" % "], [".join(", ".join(row) for row in POSEIDON["M"]),
+        "def read_big(i):",
+        "    v = sint.get_input_from(i)",
+        "    for _ in range(%d):" % (BIG_LIMBS - 1),
+        "        v = v * %d + sint.get_input_from(i)" % (1 << MASK_LIMB_BITS),
+        "    return v",
+        "salt = [[read_big(i) for c in range(%d)] for i in range(%d)]" % (cols, n),
+        "pub = [[[read_big(j) for c in range(%d)] for i in range(%d)] for j in range(%d)]" % (cols, n, n),
+        "def sbox(x):",
+        "    x2 = x * x",
+        "    return x2 * x2 * x",
+        "def poseidon(x, y):",
+        "    st = [sint(0), x, y]",
+        "    for rr in range(%d):" % (rounds_f + rounds_p),
+        "        st = [st[k] + cint(PC[rr * 3 + k]) for k in range(3)]",
+        "        if rr < %d or rr >= %d:" % (rounds_f // 2, rounds_f // 2 + rounds_p),
+        "            st = [sbox(e) for e in st]",
+        "        else:",
+        "            st[0] = sbox(st[0])",
+        "        st = [sum(cint(PM[k][m]) * st[m] for m in range(3)) for k in range(3)]",
+        "    return st[0]",
+        "inputs = [a, b] if %d == 2 else [a]" % cols,
+        "bad = [cint(0) for _ in range(%d)]" % n,
+        "for i in range(%d):" % n,
+        "    for c in range(%d):" % cols,
+        "        h = poseidon(inputs[c][i] + cint(%d), salt[i][c])" % COMMITMENT_OFFSET,
+        "        for j in range(%d):" % n,
+        "            bad[i] = bad[i] + (((h - pub[j][i][c]) * sint.get_random()).reveal() != 0)",
+        "total_bad = sum(bad)",
+    ]
 
 
 def masked_circuit_source(n, ring, q):
@@ -141,12 +202,26 @@ def masked_circuit_source(n, ring, q):
     if q["output"] == "THRESHOLD":
         lines.append("bit = (r %s limit)" % q["comparator"])
         lines.append("r = zero * 2 + (1 - zero) * bit" if op == "RATIO" else "r = bit")
-    lines.append("print_ln('%s%%s', (r + mask).reveal())" % RESULT_TAG)
+    if q["inputCheck"]:
+        if op == "RATIO":
+            # BN254 ikinin kuvvetine yakın olmadığından tam kesme çok pahalı; olasılıksal kesme son bitte ±1 hata verir
+            lines.insert(0, "program.use_trunc_pr = True")
+        lines += input_check_source(n, q)
+        lines += ["@if_e(total_bad == 0)",
+                  "def _():",
+                  "    print_ln('%s%%s', (r + mask).reveal())" % RESULT_TAG,
+                  "@else_",
+                  "def _():",
+                  "    print_ln('%s' + ' %%s' * %d, *bad)" % (INPUT_REJECTED_TAG, n)]
+    else:
+        lines.append("print_ln('%s%%s', (r + mask).reveal())" % RESULT_TAG)
     return "\n".join(lines) + "\n"
 
 
 def ensure_masked_compiled(n, protocol, q):
     ring = is_ring_protocol(protocol)
+    if q["inputCheck"] and ring:
+        raise ValueError("Girdi kontrolü halka protokolünde yapılamaz.")
     if q["operation"] == "PRODUCT" and n > MAX_PRODUCT_PARTIES:
         raise ValueError("Çarpım en fazla %d kurumla yapılabilir." % MAX_PRODUCT_PARTIES)
     source = masked_circuit_source(n, ring, q)
@@ -160,7 +235,7 @@ def ensure_masked_compiled(n, protocol, q):
         if ring:
             field_args = ["-R", str(RING_BITS)]
         else:
-            field_args = ["-P", str(RESULT_FIELD_PRIME), "-F", "200" if q["operation"] == "PRODUCT" and q["output"] == "THRESHOLD" else "64"]
+            field_args = ["-P", str(field_prime(q)), "-F", "200" if q["operation"] == "PRODUCT" and q["output"] == "THRESHOLD" else "64"]
         p = subprocess.run([sys.executable, os.path.join(MPSPDZ_HOME, "compile.py")] + field_args + [name],
                            cwd=MPSPDZ_HOME, capture_output=True, text=True, timeout=120)
     if p.returncode != 0:
@@ -174,7 +249,14 @@ def check_input_bound(q, *values):
         raise ValueError("Kurum değeri bu işlem için izin verilen aralığın dışında.")
 
 
-def run_masked_party(binary, protocol, data, pid, n, corrupt, value, denominator, mask, q, hosts, certs, base_port):
+def big_limbs(v):
+    if not 0 <= v < BN254_PRIME:
+        raise ValueError("Tuz veya taahhüt alanın dışında.")
+    return [(v >> (MASK_LIMB_BITS * k)) & (2 ** MASK_LIMB_BITS - 1) for k in reversed(range(BIG_LIMBS))]
+
+
+def run_masked_party(binary, protocol, data, pid, n, corrupt, value, denominator, mask, q, hosts, certs, base_port,
+                     salts=(), commitments=()):
     ring = is_ring_protocol(protocol)
     name = ensure_masked_compiled(n, protocol, q)
     job_dir = os.path.dirname(data)
@@ -194,6 +276,15 @@ def run_masked_party(binary, protocol, data, pid, n, corrupt, value, denominator
     if q["output"] == "THRESHOLD" and pid == 0:
         inputs.append(q["compareValue"])
     inputs += limbs
+    if q["inputCheck"]:
+        cols = 2 if q["operation"] == "RATIO" else 1
+        if len(salts) != cols or len(commitments) != n or any(len(c) != cols for c in commitments):
+            raise ValueError("Girdi kontrolü için tuz ve taahhüt listesi eksik.")
+        for salt in salts:
+            inputs += big_limbs(salt)
+        for party in commitments:
+            for c in party:
+                inputs += big_limbs(c)
     input_prefix = os.path.join(job_dir, "Input")
     with open("%s-P%d-0" % (input_prefix, pid), "w") as fh:
         fh.write("".join("%d\n" % v for v in inputs))
@@ -204,7 +295,7 @@ def run_masked_party(binary, protocol, data, pid, n, corrupt, value, denominator
     if ring:
         cmd += ["-R", str(RING_BITS)]
     else:
-        cmd += ["-T", str(corrupt), "-P", str(RESULT_FIELD_PRIME)]
+        cmd += ["-T", str(corrupt), "-P", str(field_prime(q))]
     p = subprocess.run(cmd + [name], cwd=job_dir, capture_output=True, text=True, timeout=PARTY_TIMEOUT)
     if p.returncode != 0:
         raise RuntimeError("party %d hata: %s" % (pid, (p.stderr or p.stdout)[-600:]))
@@ -269,6 +360,8 @@ class MpSpdzHandler(http.server.BaseHTTPRequestHandler):
             value, mask = int(body["input"]), int(body["mask"])
             denominator = int(body.get("denominator", 0))
             check_input_bound(q, value, denominator)
+            salts = [int(x) for x in body.get("salts", [])]
+            commitments = [[int(x) for x in party] for party in body.get("commitments", [])]
             base_port = int(body["basePort"])
             data = job_data_dir(body["jobId"])
             if not os.path.isfile(os.path.join(data, "P%d.key" % pid)):
@@ -276,8 +369,11 @@ class MpSpdzHandler(http.server.BaseHTTPRequestHandler):
         except (KeyError, ValueError) as e:
             return self._json(400, {"success": False, "error": "Geçersiz istek: %s" % e})
         try:
-            out = run_masked_party(binary, protocol, data, pid, n, corrupt, value, denominator, mask, q, hosts, certs, base_port)
+            out = run_masked_party(binary, protocol, data, pid, n, corrupt, value, denominator, mask, q, hosts, certs, base_port,
+                                   salts, commitments)
             self._json(200, {"success": True, "partyId": pid, "maskedResult": None if out is None else str(out)})
+        except InputRejected as e:
+            self._json(409, {"success": False, "code": "INPUT_REJECTED", "error": str(e)})
         except Exception as e:
             self._json(500, {"success": False, "error": str(e)})
         finally:
