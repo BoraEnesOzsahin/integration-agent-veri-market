@@ -203,9 +203,6 @@ def masked_circuit_source(n, ring, q):
         lines.append("bit = (r %s limit)" % q["comparator"])
         lines.append("r = zero * 2 + (1 - zero) * bit" if op == "RATIO" else "r = bit")
     if q["inputCheck"]:
-        if op == "RATIO":
-            # BN254 ikinin kuvvetine yakın olmadığından tam kesme çok pahalı; olasılıksal kesme son bitte ±1 hata verir
-            lines.insert(0, "program.use_trunc_pr = True")
         lines += input_check_source(n, q)
         lines += ["@if_e(total_bad == 0)",
                   "def _():",
@@ -225,17 +222,21 @@ def ensure_masked_compiled(n, protocol, q):
     if q["operation"] == "PRODUCT" and n > MAX_PRODUCT_PARTIES:
         raise ValueError("Çarpım en fazla %d kurumla yapılabilir." % MAX_PRODUCT_PARTIES)
     source = masked_circuit_source(n, ring, q)
-    name = "verimarket_%s_%s" % ("r" if ring else "f", hashlib.sha256(source.encode()).hexdigest()[:16])
+    if ring:
+        field_args = ["-R", str(RING_BITS)]
+    else:
+        # Asal derlemeye verilmez, taraflara çalışırken -P ile verilir. Derleyici asalı bilirse ona özel kod üretir;
+        # BN254 gibi ikinin kuvvetinden uzak bir asalda bu kod bölme ve karşılaştırmayı onlarca kat pahalılaştırır.
+        # Asalsız derlemede istatistiksel maskeli genel kod çıkar: her iki alanda da (-F bit + 40 bit) < asal olduğundan doğrudur.
+        field_args = ["-F", "200" if q["operation"] == "PRODUCT" and q["output"] == "THRESHOLD" else "64"]
+    # Derleme ayarları da ada girer: ayar değişince önbellekteki eski devre kullanılmaz
+    name = "verimarket_%s_%s" % ("r" if ring else "f", hashlib.sha256((source + "|" + " ".join(field_args)).encode()).hexdigest()[:16])
     src = os.path.join(MPSPDZ_HOME, "Programs", "Source", name + ".mpc")
     with COMPILE_LOCK:
         if os.path.isfile(os.path.join(MPSPDZ_HOME, "Programs", "Schedules", name + ".sch")):
             return name
         with open(src, "w") as fh:
             fh.write(source)
-        if ring:
-            field_args = ["-R", str(RING_BITS)]
-        else:
-            field_args = ["-P", str(field_prime(q)), "-F", "200" if q["operation"] == "PRODUCT" and q["output"] == "THRESHOLD" else "64"]
         p = subprocess.run([sys.executable, os.path.join(MPSPDZ_HOME, "compile.py")] + field_args + [name],
                            cwd=MPSPDZ_HOME, capture_output=True, text=True, timeout=120)
     if p.returncode != 0:
